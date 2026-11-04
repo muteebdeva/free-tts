@@ -68,6 +68,21 @@ export type Phase =
 export const MAX_CHARS = 5000;
 const PREVIEW_TEXT = (name: string) => `Hello, I'm ${name}. This is how I sound.`;
 
+/**
+ * Dev/test asset mirror (same convention as app/verify): `?assets=1` points
+ * model loads at the same-origin verification mirror instead of the public
+ * CDN, so the real Studio UI is drivable in sandboxes where the CDN is
+ * unreachable. Production never sets this — there is no /api/verify-assets
+ * route in the production export, so it would 404 and surface the honest
+ * model-load error instead.
+ */
+function verifyAssetBase(): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  return new URLSearchParams(window.location.search).get("assets") === "1"
+    ? "/api/verify-assets"
+    : undefined;
+}
+
 interface QueuedChunk {
   index: number;
   url: string;
@@ -611,6 +626,7 @@ export function TTSProvider({ children }: { children: ReactNode }) {
             numThreads:
               p && p.ortThreads > 0 ? p.ortThreads : undefined,
             sameOriginWasm: p?.ortWasmBase === "same-origin",
+            assetBase: verifyAssetBase(),
           });
           setDevice(dev);
           slot.setLoaded(true);
@@ -921,6 +937,7 @@ export function TTSProvider({ children }: { children: ReactNode }) {
                 engineId: "kokoro",
                 numThreads: p && p.ortThreads > 0 ? p.ortThreads : undefined,
                 sameOriginWasm: p?.ortWasmBase === "same-origin",
+                assetBase: verifyAssetBase(),
               });
               setDevice(dev);
               slot.setLoaded(true);

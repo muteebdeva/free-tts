@@ -214,7 +214,8 @@ export default function StudioPage() {
         variant={phase === "streaming" ? "secondary" : "destructive"}
         onClick={tts.cancel}
         size="lg"
-        className={className}
+        // min-h-11: the primary CTA is a key touch target (>=44px).
+        className={`min-h-11 ${className ?? ""}`}
         title={
           phase === "streaming"
             ? "Stop generating — keeps the audio generated so far"
@@ -229,7 +230,8 @@ export default function StudioPage() {
         onClick={doGenerate}
         disabled={!canGenerate}
         size="lg"
-        className={className}
+        // min-h-11: the primary CTA is a key touch target (>=44px).
+        className={`min-h-11 ${className ?? ""}`}
       >
         {generateLabel}
       </Button>
