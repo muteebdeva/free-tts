@@ -1,5 +1,5 @@
 {
-  "date": "2026-11-04T13:15:17.161Z",
+  "date": "2026-11-04T13:37:12.354Z",
   "text": "The harbor woke before the sun. Gulls argued over the fishing boats while the tide pulled at the moorings. Mara drank her coffee on the dock and watched the water turn from black to green to gold. Somewhere beyond the breakwater, a foghorn sounded twice and then fell silent. She had mended nets in this town for forty years, and she knew every rope the way other people know songs. The gulls settled as the sun cleared the point and the water went flat. Mara turned the boat toward home, the engine humming low under her feet.",
   "voice": "af_heart",
   "engine": "kokoro",
@@ -64,7 +64,7 @@
     {
       "name": "first chunk starts at t≈0",
       "pass": true,
-      "detail": "0.0000 s"
+      "detail": "0.0319 s"
     },
     {
       "name": "no ≥50 ms near-zero run within ±50 ms of any joint",

@@ -1,5 +1,5 @@
 {
-  "date": "2026-11-04T13:02:06.932Z",
+  "date": "2026-11-04T13:25:27.703Z",
   "artifact": "cloudflare-pages static export (out/)",
   "text": "Hello. This is a verification test of the FreeTTS Pages build. Real artificial intelligence is speaking locally, inside your browser.",
   "voice": "af_heart",
@@ -13,9 +13,9 @@
   "peak": 0.5405,
   "nonSilentFraction": 0.6259,
   "chunkCount": 1,
-  "loadMs": 16522,
-  "synthMs": 78020,
-  "realtimeFactor": 8.435,
+  "loadMs": 16099,
+  "synthMs": 78082,
+  "realtimeFactor": 8.442,
   "wavBytes": 444002,
   "checks": [
     {
