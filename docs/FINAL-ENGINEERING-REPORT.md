@@ -97,9 +97,11 @@ The streaming gate's streamed-vs-batch byte-match check cannot pass for kitten. 
 ## 9. Verify — Final QA (Phase 9)
 
 - tsc clean, 109/109 vitest pass.
-- Real-audio gates passed for both engines (kokoro via the pre-existing gate; kitten via the new `--engine kitten` paths).
+- Real-audio gates passed for both engines:
+  - Kokoro: `--stream` PASSED (3 chunks, first-chunk 50.4s vs 123.5s total, byte-match true, peak 0.67).
+  - Kitten: `--engine kitten --stream` PASSED (3 chunks, first-chunk 26.7s vs 59.1s total, transport check true, peak 0.43).
 - Production build: `scripts/build-pages.sh` (default, WITHOUT verify) → `out/` contains no `verify.html` and no `out/api/verify-assets` (test mirror does not ship).
-- **Redeploy:** [PENDING — Cloudflare Pages `free-tts` project redeploy authorized; awaiting gate completion.]
+- **Redeploy:** ✅ DONE 2026-11-04 — Cloudflare Pages `free-tts` project. Deployment URL: https://2a9e7c75.free-tts-51f.pages.dev (42 files; COOP/COEP headers verified live; KittenTTS Nano tab present in deployed HTML).
 
 ## 10. Document — Deliverables (Phase 10)
 
@@ -127,7 +129,7 @@ Per the brief: there is no iPhone hardware in this environment. The device ladde
 
 ## Pending decisions (for Muteeb)
 
-1. **GitHub push**: 9 finished local commits (audit 1, Track A 6, Track B 3, integration + tests + fix) need his token to push to `muteebdeva/free-tts`.
-2. **Cloudflare Pages redeploy**: authorized; will complete after the final gate run.
-3. **Real-device testing**: needs his iPhone — the phone-hang fix cannot be called verified until his device confirms it.
+1. **GitHub push**: 10 finished local commits (audit 1, Track A 6, Track B 3, integration 1, tests 1, kitten-fix 1, gate-fix 1, report 1 — see `git log`) need his token to push to `muteebdeva/free-tts`. HARD BOUNDARY: never push without his explicit per-action OK.
+2. **Real-device testing**: needs his iPhone — the phone-hang fix cannot be called verified until his device confirms it. The sandbox cannot QA his phone (standing lesson).
+3. **Cloudflare Pages**: ✅ deployed to https://2a9e7c75.free-tts-51f.pages.dev (the production https://free-tts-51f.pages.dev serves the latest deployment).
 4. **pcmByteMatch for kitten**: if the re-run confirms non-determinism, the byte-match gate stays kokoro-only by design (documented).
