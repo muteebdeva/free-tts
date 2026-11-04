@@ -12,7 +12,8 @@
  * PASS = real open-source TTS inference ran in the browser. Any failure here
  * is a hard STOP: the project must not proceed to UI work on fake audio.
  *
- * Usage: node scripts/verify-audio.mjs [--text "..."] [--voice af_heart]
+ * Usage: node scripts/verify-audio.mjs [--text "..."] [--voice af_heart] [--prod]
+ *   --prod verifies the production build (`next start`) instead of `next dev`.
  */
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
@@ -26,10 +27,13 @@ const opt = (name, fallback) => {
 };
 const TEXT = opt("--text", "Hello. This is a verification test of the FreeTTS speech engine. Real artificial intelligence is speaking locally, inside your browser.");
 const VOICE = opt("--voice", "af_heart");
+const PROD = args.includes("--prod");
 
 function startDevServer() {
   return new Promise((resolve, reject) => {
-    const proc = spawn("npx", ["next", "dev", "--port", String(PORT)], {
+    const cmd = PROD ? ["next", "start", "--port", String(PORT)] : ["next", "dev", "--port", String(PORT)];
+    console.log(`[verify] starting ${PROD ? "production server" : "next dev"}…`);
+    const proc = spawn("npx", cmd, {
       cwd: new URL("..", import.meta.url).pathname,
       // FREETTS_VERIFY_ASSETS=1 enables the same-origin model mirror
       // (app/api/verify-assets) — dev/test only, never production.
@@ -38,7 +42,7 @@ function startDevServer() {
     });
     const timer = setTimeout(() => {
       proc.kill();
-      reject(new Error("next dev did not become ready in 120s"));
+      reject(new Error(PROD ? "next start did not become ready in 120s" : "next dev did not become ready in 120s"));
     }, 120000);
     let out = "";
     const onData = (d) => {
@@ -166,10 +170,10 @@ try {
   checks.push({ name: "no fatal error", pass: false, detail: String(e).slice(0, 200) });
   process.exitCode = 1;
 } finally {
-  // Kill the whole dev-server tree (npx wrapper + next-server child).
+  // Kill the whole server tree (npx wrapper + next-server child).
   try {
     const { execSync } = await import("node:child_process");
-    execSync(`pkill -f "[n]ext dev --port ${PORT}"`);
+    execSync(`pkill -f "[n]ext (dev|start) --port ${PORT}"`);
   } catch { /* already dead */ }
   if (devProc) devProc.kill("SIGKILL");
 }

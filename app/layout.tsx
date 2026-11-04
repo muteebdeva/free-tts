@@ -4,6 +4,7 @@ import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
 import { TTSProvider } from "@/components/tts-provider";
 import { SiteHeader } from "@/components/site-header";
+import { SwRegister } from "@/components/sw-register";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -19,6 +20,9 @@ export const metadata: Metadata = {
   title: "FreeTTS — free, local-first AI text-to-speech",
   description:
     "Type text, pick a voice, hear real AI speech synthesized entirely on your device. No accounts, no fees, no text sent to any server.",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: { capable: true, title: "FreeTTS", statusBarStyle: "default" },
+  icons: { icon: "/icons/icon.svg", apple: "/icons/icon.svg" },
 };
 
 export const viewport: Viewport = {
@@ -47,6 +51,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       </head>
       <body className="flex min-h-full flex-col bg-background text-foreground">
         <ThemeProvider>
+          <SwRegister />
           <TTSProvider>
             <SiteHeader />
             <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8">
