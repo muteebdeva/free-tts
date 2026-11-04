@@ -1,18 +1,19 @@
 {
-  "date": "2026-11-04T09:44:19.982Z",
-  "text": "The harbor woke before the sun. Gulls argued over the fishing boats while the tide pulled at the moorings. Mara drank her coffee on the dock and watched the water turn from black to green to gold. Somewhere beyond the breakwater, a foghorn sounded twice and then fell silent. She had mended nets in this town for forty years, and she knew every rope the way other people know songs.",
+  "date": "2026-11-04T09:48:58.968Z",
+  "text": "The harbor woke before the sun. Gulls argued over the fishing boats while the tide pulled at the moorings. Mara drank her coffee on the dock and watched the water turn from black to green to gold. Somewhere beyond the breakwater, a foghorn sounded twice and then fell silent. She had mended nets in this town for forty years, and she knew every rope the way other people know songs. The gulls settled as the sun cleared the point and the water went flat. Mara turned the boat toward home, the engine humming low under her feet.",
   "voice": "expr-voice-2-f",
   "engine": "kitten",
-  "numSamples": 981008,
-  "durationSec": 40.88,
-  "peak": 0.3748,
-  "chunkCount": 2,
+  "numSamples": 1335894,
+  "durationSec": 55.66,
+  "peak": 0.359,
+  "chunkCount": 3,
   "trimmedLengths": [
     493000,
-    488200
+    488200,
+    355078
   ],
   "worstJointScheduleErrMs": 0,
-  "worstJointSilenceMs": 100,
+  "worstJointSilenceMs": 9.9,
   "audioRunningHeadless": true,
   "checks": [
     {
@@ -27,8 +28,8 @@
     },
     {
       "name": "multiple chunks streamed",
-      "pass": false,
-      "detail": "chunkCount=2"
+      "pass": true,
+      "detail": "chunkCount=3"
     },
     {
       "name": "AudioContext unlock() succeeded",
@@ -48,33 +49,33 @@
     {
       "name": "not silent (peak > 0.02)",
       "pass": true,
-      "detail": "0.3748"
+      "detail": "0.3590"
     },
     {
       "name": "timeline covers every chunk",
       "pass": true,
-      "detail": "2 vs 2"
+      "detail": "3 vs 3"
     },
     {
       "name": "every joint overlaps by exactly the 8 ms crossfade (±2 ms)",
       "pass": true,
-      "detail": "worst joint error 0.000 ms over 1 joints"
+      "detail": "worst joint error 0.000 ms over 2 joints"
     },
     {
       "name": "first chunk starts at t≈0",
       "pass": true,
-      "detail": "0.0319 s"
+      "detail": "0.0203 s"
     },
     {
-      "name": "no ≥50 ms silence run within ±50 ms of any joint",
-      "pass": false,
-      "detail": "worst 100.0 ms at joint 1"
+      "name": "no ≥50 ms near-zero run within ±50 ms of any joint",
+      "pass": true,
+      "detail": "worst 9.9 ms at joint 2"
     },
     {
       "name": "stitched sample count matches trim+crossfade transform exactly",
       "pass": true,
-      "detail": "981008 vs 981008 (raw chunk sum 981200, trimmed 192 samples incl. 192 crossfade)"
+      "detail": "1335894 vs 1335894 (raw chunk sum 1336278, trimmed 384 samples incl. 384 crossfade)"
     }
   ],
-  "pass": false
+  "pass": true
 }
