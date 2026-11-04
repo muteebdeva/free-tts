@@ -29,8 +29,10 @@ allow relicensing the app permissively. Tracked in the roadmap; not implemented.
 | Kokoro voice embeddings | v1.0 | **Apache-2.0** (bundled with model) | 28 preset voices (downloaded per voice) |
 | kokoro-js | 1.2.1 | **Apache-2.0** | browser inference wrapper (npm) |
 | @huggingface/transformers | 3.8.1 | **Apache-2.0** | model runtime (via kokoro-js) |
-| onnxruntime-web | 1.22.0-dev | **MIT** | inference execution providers (via transformers.js) |
-| phonemizer | 1.2.1 | declares Apache-2.0; **bundles eSpeak-NG (GPL-3.0)** | text → phonemes (via kokoro-js) |
+| onnxruntime-web | 1.22.0-dev | **MIT** | inference execution providers (via transformers.js; direct dep for the KittenTTS engine) |
+| phonemizer | 1.2.1 | declares Apache-2.0; **bundles eSpeak-NG (GPL-3.0)** | text → phonemes (via kokoro-js; direct dep for the KittenTTS engine) |
+| KittenTTS Nano model weights | 0.8 int8 (KittenML) | **Apache-2.0** (verified on the exact HF repo — see docs/KITTEN-SPIKE.md) | light neural TTS model (downloaded at runtime from HuggingFace) |
+| KittenTTS voice embeddings | 0.8 (`voices.npz`) | **Apache-2.0** (same distribution) | 8 preset voices (downloaded with model) |
 | eSpeak-NG (inside phonemizer) | bundled build | **GPL-3.0** | phonemization engine — the reason this app is GPL-3.0-or-later |
 | lamejs | (MP3 export) | **BSD** (LGPL-licensed MP3 tech; lamejs is a JS port) | MP3 encoding in-browser |
 | Next.js / React / TypeScript | see package.json | MIT / Apache-2.0 | app framework |
@@ -48,3 +50,9 @@ page.
 Kokoro-82M weights and voice embeddings are Apache-2.0 and may be downloaded and
 redistributed with attribution. FreeTTS downloads them at runtime from
 `huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX`; it does not bundle them.
+
+KittenTTS Nano weights (`KittenML/kitten-tts-nano-0.8-int8`) and `voices.npz`
+are Apache-2.0 (license tag verified on the exact HuggingFace repo 2026-11-04;
+the official GitHub repo carries an Apache-2.0 LICENSE). FreeTTS downloads
+them at runtime; it does not bundle them. Note: KittenTTS *2* weights use a
+different, non-open-source license and are NOT used.

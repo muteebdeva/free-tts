@@ -13,6 +13,7 @@ import {
   listModelCaches,
   type CacheInfo,
 } from "@/lib/model-store";
+import { classifyDevice, type DeviceProfile } from "@/lib/device-profile";
 
 export default function SettingsPage() {
   const { device, kokoroLoaded, unloadModel } = useTTS();
@@ -20,7 +21,7 @@ export default function SettingsPage() {
   const [storage, setStorage] = useState<{ usage: number; quota: number } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [webgpu, setWebgpu] = useState<boolean | null>(null);
+  const [profile, setProfile] = useState<DeviceProfile | null>(null);
 
   const refresh = useCallback(async () => {
     setRefreshing(true);
@@ -35,7 +36,12 @@ export default function SettingsPage() {
 
   useEffect(() => {
     void refresh();
-    setWebgpu(typeof navigator !== "undefined" && "gpu" in navigator);
+    // Device profile (adapter-verified, not a `"gpu" in navigator` guess) +
+    // the engine's actual active device path come from the ladder, not from
+    // API presence.
+    classifyDevice()
+      .then(setProfile)
+      .catch(() => undefined);
   }, [refresh, kokoroLoaded]);
 
   const onDelete = async () => {
@@ -64,11 +70,14 @@ export default function SettingsPage() {
         </CardHeader>
         <CardContent className="space-y-2 text-sm">
           <div className="flex items-center justify-between">
-            <span className="text-muted-foreground">WebGPU</span>
-            <Badge variant={webgpu ? "default" : "secondary"}>
-              {webgpu === null ? "checking…" : webgpu ? "available" : "not available"}
+            <span className="text-muted-foreground">Device profile</span>
+            <Badge variant={profile ? "default" : "secondary"}>
+              {profile ? profile.label : "checking…"}
             </Badge>
           </div>
+          {profile && (
+            <p className="text-xs text-muted-foreground">{profile.blurb}</p>
+          )}
           <div className="flex items-center justify-between">
             <span className="text-muted-foreground">Active inference path</span>
             <Badge variant="outline">{device ?? "not loaded yet"}</Badge>
@@ -78,9 +87,12 @@ export default function SettingsPage() {
             <Badge variant="outline">{kokoroLoaded ? "yes" : "no"}</Badge>
           </div>
           <p className="text-xs text-muted-foreground">
-            WebGPU uses the full-precision model (~326 MB download, fastest).
-            Without it, the app uses the quantized model (~92 MB) on the CPU —
-            slower than real time, but fully offline after download.
+            The profile is verified, not guessed: a working WebGPU adapter
+            means the full-precision Kokoro model (~326 MB download,
+            fastest). Without one, the app defaults to the quantized Kokoro
+            model (~92 MB) or KittenTTS Nano (~27 MB) on the CPU — slower
+            than real time, but fully offline after download. On
+            compatibility devices, system voices are the default.
           </p>
         </CardContent>
       </Card>
@@ -142,7 +154,11 @@ export default function SettingsPage() {
         </CardHeader>
         <CardContent className="space-y-1 text-sm text-muted-foreground">
           <p>FreeTTS v1 — free, local-first AI text-to-speech.</p>
-          <p>Engine: Kokoro-82M (Apache-2.0) via kokoro-js, ONNX Runtime Web.</p>
+          <p>
+            Engines: Kokoro-82M (Apache-2.0) via kokoro-js, KittenTTS Nano
+            (Apache-2.0) via onnxruntime-web, system voices via the Web
+            Speech API.
+          </p>
           <p>App license: GPL-3.0-or-later (see THIRD-PARTY-NOTICES.md).</p>
         </CardContent>
       </Card>
