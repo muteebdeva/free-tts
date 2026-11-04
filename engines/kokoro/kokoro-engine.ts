@@ -27,12 +27,39 @@ const MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
 type DeviceKind = "webgpu" | "wasm";
 
 function detectDevice(): DeviceKind {
-  // navigator.gpu is undefined on browsers without WebGPU (e.g. Firefox
-  // stable without flags, older Safari). Note: presence of the API does not
-  // guarantee a usable adapter — load() falls back to WASM on failure.
+  // Fast sync guess: navigator.gpu is undefined on browsers without WebGPU
+  // (e.g. Firefox stable without flags, older Safari). Presence of the API
+  // does NOT guarantee a usable adapter — load() verifies with
+  // resolveDevice() before downloading anything.
   return typeof navigator !== "undefined" && "gpu" in navigator
     ? "webgpu"
     : "wasm";
+}
+
+interface GpuWithAdapter {
+  requestAdapter?: (options?: object) => Promise<unknown>;
+}
+
+/**
+ * Verify a usable WebGPU adapter exists BEFORE any model bytes are fetched.
+ * Headless Chromium, VMs, and some mobile browsers expose `navigator.gpu`
+ * with no usable adapter — the old code then downloaded the 326 MB fp32
+ * model before failing. Adapter-less devices now go straight to the 92 MB
+ * q8 WASM build.
+ */
+async function resolveDevice(): Promise<DeviceKind> {
+  if (typeof navigator === "undefined") return "wasm";
+  const gpu = (navigator as Navigator & { gpu?: GpuWithAdapter }).gpu;
+  if (!gpu?.requestAdapter) return "wasm";
+  try {
+    const adapter = await Promise.race([
+      gpu.requestAdapter(),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 8000)),
+    ]);
+    return adapter ? "webgpu" : "wasm";
+  } catch {
+    return "wasm";
+  }
 }
 
 export class KokoroEngine implements TTSEngine {
@@ -69,6 +96,12 @@ export class KokoroEngine implements TTSEngine {
     if (this.loading) return this.loading;
 
     this.loading = (async () => {
+      // Resolve the REAL device before downloading anything: on adapter-less
+      // devices this picks wasm/q8 immediately instead of fetching the
+      // 326 MB fp32 model and failing at session creation.
+      if (this.device === "webgpu") {
+        this.device = await resolveDevice();
+      }
       const dtype = this.device === "webgpu" ? "fp32" : "q8";
       const progress_callback: ProgressCallback | undefined = onProgress
         ? (info) => {
