@@ -15,9 +15,10 @@
 import { KokoroEngine } from "../engines/kokoro/kokoro-engine";
 import { concatChunks } from "../audio/concat";
 import { chunkText } from "../lib/text-chunk";
+import { env as kokoroEnv } from "kokoro-js";
 
 type InMessage =
-  | { type: "load"; requestId: number }
+  | { type: "load"; requestId: number; assetBase?: string }
   | { type: "voices"; requestId: number }
   | { type: "synthesize"; requestId: number; text: string; voiceId: string; speed: number }
   | { type: "cancel"; requestId: number }
@@ -27,6 +28,45 @@ type InMessage =
 const engine = new KokoroEngine();
 let currentAbort: AbortController | null = null;
 let currentRequestId: number | null = null;
+let fetchWrapped = false;
+
+/**
+ * Point all external asset downloads at a local mirror (same origin).
+ * Used ONLY by the verification harness (scripts/verify-audio.mjs), where the
+ * sandbox proxy blocks the browser's direct CDN access. Rewrites:
+ *  - https://huggingface.co/... (model, tokenizer, voices — kokoro-js
+ *    hardcodes voice URLs, so env config alone cannot redirect them)
+ *  - https://cdn.jsdelivr.net/... (fallback)
+ * and pins the ONNX Runtime WASM binaries to the mirror via env.wasmPaths.
+ */
+function useAssetMirror(assetBase: string): void {
+  kokoroEnv.wasmPaths = `${assetBase}/ort/`;
+  if (fetchWrapped) return;
+  fetchWrapped = true;
+  const originalFetch = globalThis.fetch.bind(globalThis);
+  const rewrites: Array<[string, string]> = [
+    ["https://huggingface.co/", `${assetBase}/mirror/huggingface.co/`],
+    ["https://cdn.jsdelivr.net/", `${assetBase}/mirror/cdn.jsdelivr.net/`],
+  ];
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    let url: string | null = null;
+    if (typeof input === "string") url = input;
+    else if (input instanceof URL) url = input.href;
+    else if (typeof (input as Request).url === "string") url = (input as Request).url;
+    if (url) {
+      for (const [from, to] of rewrites) {
+        if (url.startsWith(from)) {
+          const rewritten = to + url.slice(from.length);
+          input = (typeof input === "string" || input instanceof URL
+            ? rewritten
+            : new Request(rewritten, input as Request)) as RequestInfo;
+          break;
+        }
+      }
+    }
+    return originalFetch(input as RequestInfo, init);
+  }) as typeof fetch;
+}
 
 function post(msg: unknown, transfer?: Transferable[]) {
   (self as unknown as Worker).postMessage(msg, transfer ?? []);
@@ -41,6 +81,7 @@ self.onmessage = async (event: MessageEvent<InMessage>) => {
         break;
       }
       case "load": {
+        if (msg.assetBase) useAssetMirror(msg.assetBase);
         await engine.load((fraction) =>
           post({ type: "load-progress", requestId: msg.requestId, fraction }),
         );

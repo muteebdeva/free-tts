@@ -12,6 +12,7 @@
  *    calls, but an in-flight ONNX forward pass cannot be interrupted.
  */
 import { KokoroTTS } from "kokoro-js";
+import type { ProgressCallback } from "@huggingface/transformers";
 import type {
   EngineCapabilities,
   GenerationOptions,
@@ -22,7 +23,6 @@ import type {
 import { DEFAULT_VOICE_ID, KOKORO_VOICES, isKnownVoice } from "./voices";
 
 const MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
-const SAMPLE_RATE = 24000;
 
 type DeviceKind = "webgpu" | "wasm";
 
@@ -70,17 +70,20 @@ export class KokoroEngine implements TTSEngine {
 
     this.loading = (async () => {
       const dtype = this.device === "webgpu" ? "fp32" : "q8";
+      const progress_callback: ProgressCallback | undefined = onProgress
+        ? (info) => {
+            // transformers.js reports per-file progress (0..100) with
+            // status "progress"; other statuses carry no progress number.
+            if (info.status === "progress") {
+              onProgress(Math.min(1, Math.max(0, info.progress / 100)));
+            }
+          }
+        : undefined;
       try {
         this.tts = await KokoroTTS.from_pretrained(MODEL_ID, {
           dtype,
           device: this.device,
-          progress_callback: onProgress
-            ? (info: { progress?: number }) => {
-                // transformers.js reports per-file progress; clamp to 0..1.
-                const p = info?.progress;
-                if (typeof p === "number") onProgress(Math.min(1, Math.max(0, p / 100)));
-              }
-            : undefined,
+          progress_callback,
         });
       } catch (err) {
         // If WebGPU was selected but the adapter fails (e.g. SwiftShader
@@ -90,12 +93,7 @@ export class KokoroEngine implements TTSEngine {
           this.tts = await KokoroTTS.from_pretrained(MODEL_ID, {
             dtype: "q8",
             device: "wasm",
-            progress_callback: onProgress
-              ? (info: { progress?: number }) => {
-                  const p = info?.progress;
-                  if (typeof p === "number") onProgress(Math.min(1, Math.max(0, p / 100)));
-                }
-              : undefined,
+            progress_callback,
           });
         } else {
           throw err;
@@ -129,11 +127,10 @@ export class KokoroEngine implements TTSEngine {
     const audio = await this.tts.generate(text, { voice: voice as never, speed });
     if (options.signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
-    // audio is RawAudio { data: Float32Array, sampling_rate: 24000 }.
-    const data = audio.data as Float32Array;
+    // audio is RawAudio { audio: Float32Array, sampling_rate: number }.
     return {
-      samples: data.slice(), // copy: the buffer may be reused internally
-      sampleRate: SAMPLE_RATE,
+      samples: audio.audio.slice(), // copy: the buffer may be reused internally
+      sampleRate: audio.sampling_rate,
     };
   }
 

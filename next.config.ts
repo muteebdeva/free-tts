@@ -15,6 +15,20 @@ const nextConfig: NextConfig = {
   /* config options here */
   cacheComponents: true,
   partialPrefetching: true,
+  // Threaded WebAssembly (onnxruntime-web) requires SharedArrayBuffer, which
+  // requires these two headers. Every deployment must preserve them —
+  // see docs/DEPLOYMENT.md. (Without them, model inference cannot start.)
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+          { key: "Cross-Origin-Embedder-Policy", value: "require-corp" },
+        ],
+      },
+    ];
+  },
   turbopack: {
     rules: {
       "*.css": {

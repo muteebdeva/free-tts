@@ -38,13 +38,16 @@ export default function VerifyRunner() {
         "Hello. This is a verification test of the FreeTTS speech engine.";
       const voice = params.get("voice") || "af_heart";
       const speed = parseFloat(params.get("speed") || "1") || 1;
+      // ?assets=1 → use the same-origin verification mirror (see
+      // app/api/verify-assets). Production never sets this.
+      const assetBase = params.get("assets") === "1" ? "/api/verify-assets" : undefined;
       const t0 = performance.now();
       try {
         const mgr = getEngineManager();
         setStatus("loading model…");
         const device = await mgr.loadModel((f) => {
           if (!cancelled) setStatus(`loading model… ${Math.round(f * 100)}%`);
-        });
+        }, assetBase ? { assetBase } : {});
         const t1 = performance.now();
         if (!cancelled) setStatus("synthesizing…");
         const result = await mgr.synthesize(text, voice, speed, {

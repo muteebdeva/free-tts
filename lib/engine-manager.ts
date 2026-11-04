@@ -56,8 +56,11 @@ export class EngineManager {
     return (res as { device: string }).device;
   }
 
-  async loadModel(onProgress?: (fraction: number) => void): Promise<string> {
-    const res = await this.call("load", {}, { onLoadProgress: onProgress });
+  async loadModel(
+    onProgress?: (fraction: number) => void,
+    opts: { assetBase?: string } = {},
+  ): Promise<string> {
+    const res = await this.call("load", { assetBase: opts.assetBase }, { onLoadProgress: onProgress });
     return (res as { device: string }).device;
   }
 

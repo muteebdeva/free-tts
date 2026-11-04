@@ -27,13 +27,13 @@ const opt = (name, fallback) => {
 const TEXT = opt("--text", "Hello. This is a verification test of the FreeTTS speech engine. Real artificial intelligence is speaking locally, inside your browser.");
 const VOICE = opt("--voice", "af_heart");
 
-const PROXY = process.env.HTTPS_PROXY || process.env.https_proxy || null;
-
 function startDevServer() {
   return new Promise((resolve, reject) => {
     const proc = spawn("npx", ["next", "dev", "--port", String(PORT)], {
       cwd: new URL("..", import.meta.url).pathname,
-      env: process.env,
+      // FREETTS_VERIFY_ASSETS=1 enables the same-origin model mirror
+      // (app/api/verify-assets) — dev/test only, never production.
+      env: { ...process.env, FREETTS_VERIFY_ASSETS: "1" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     const timer = setTimeout(() => {
@@ -70,10 +70,13 @@ try {
   devProc = await startDevServer();
   console.log("[verify] dev server ready");
 
-  console.log(`[verify] launching chromium (proxy: ${PROXY ? "env" : "none"})…`);
+  // No proxy for the browser: the page, worker, model, voices and WASM
+  // runtime are ALL served same-origin (dev server + /api/verify-assets
+  // mirror). The sandbox proxy blocks Chromium's CONNECT tunnels, so routing
+  // the browser through it would break the run; localhost bypasses it anyway.
+  console.log("[verify] launching chromium (no proxy — all same-origin)…");
   const browser = await chromium.launch({
     headless: true,
-    proxy: PROXY ? { server: PROXY } : undefined,
     args: ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"],
   });
   const page = await browser.newPage();
@@ -83,7 +86,7 @@ try {
   });
   page.on("pageerror", (e) => console.log("[pageerror]", String(e).slice(0, 500)));
 
-  const url = `http://localhost:${PORT}/verify?text=${encodeURIComponent(TEXT)}&voice=${VOICE}`;
+  const url = `http://localhost:${PORT}/verify?text=${encodeURIComponent(TEXT)}&voice=${VOICE}&assets=1`;
   console.log("[verify] loading", url.slice(0, 120) + "…");
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
 
@@ -163,5 +166,10 @@ try {
   checks.push({ name: "no fatal error", pass: false, detail: String(e).slice(0, 200) });
   process.exitCode = 1;
 } finally {
-  if (devProc) devProc.kill();
+  // Kill the whole dev-server tree (npx wrapper + next-server child).
+  try {
+    const { execSync } = await import("node:child_process");
+    execSync(`pkill -f "[n]ext dev --port ${PORT}"`);
+  } catch { /* already dead */ }
+  if (devProc) devProc.kill("SIGKILL");
 }
