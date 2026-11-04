@@ -21,10 +21,23 @@ import type {
   Voice,
 } from "../engine-interface";
 import { DEFAULT_VOICE_ID, KOKORO_VOICES, isKnownVoice } from "./voices";
+import { isIOSDevice } from "../../lib/device-profile";
 
 const MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
 
 type DeviceKind = "webgpu" | "wasm";
+type DtypeKind = "fp32" | "q8";
+
+/**
+ * Device/dtype policy injected by the caller (from lib/device-profile.ts)
+ * instead of the engine self-detecting. Any field left unset falls back to
+ * the engine's own detection. The iOS 26 force-WASM rule below still
+ * overrides a "webgpu" policy — see load().
+ */
+export interface KokoroDevicePolicy {
+  device?: DeviceKind;
+  dtype?: DtypeKind;
+}
 
 function detectDevice(): DeviceKind {
   // Fast sync guess: navigator.gpu is undefined on browsers without WebGPU
@@ -81,6 +94,22 @@ export class KokoroEngine implements TTSEngine {
   private tts: KokoroTTS | null = null;
   private loading: Promise<void> | null = null;
   private device: DeviceKind = detectDevice();
+  private readonly policy: KokoroDevicePolicy;
+
+  constructor(policy: KokoroDevicePolicy = {}) {
+    this.policy = policy;
+    // An explicitly injected device wins over the sync guess immediately so
+    // the rest of the app (badges, pre-download UI) reports the truth.
+    if (policy.device) this.device = policy.device;
+    // iOS 26 force-WASM rule: iOS Safari now exposes WebGPU, but the
+    // onnxruntime WebGPU execution provider is broken there — see
+    // https://github.com/microsoft/onnxruntime/issues/26827. Until that
+    // upstream issue is fixed, WebGPU is disabled on all iOS, no matter
+    // what the injected policy or the adapter check says.
+    if (typeof navigator !== "undefined" && isIOSDevice(navigator.userAgent)) {
+      this.device = "wasm";
+    }
+  }
 
   /** Which execution path was selected ("webgpu" | "wasm"). */
   get activeDevice(): DeviceKind {
@@ -98,11 +127,20 @@ export class KokoroEngine implements TTSEngine {
     this.loading = (async () => {
       // Resolve the REAL device before downloading anything: on adapter-less
       // devices this picks wasm/q8 immediately instead of fetching the
-      // 326 MB fp32 model and failing at session creation.
-      if (this.device === "webgpu") {
+      // 326 MB fp32 model and failing at session creation. An injected
+      // policy device is honoured, but the adapter pre-check still runs as
+      // a safety net for "webgpu" (a lying `navigator.gpu` must not trigger
+      // a 326 MB download), and the iOS force-WASM rule still overrides.
+      const ios =
+        typeof navigator !== "undefined" && isIOSDevice(navigator.userAgent);
+      if (this.device === "webgpu" && !ios) {
+        // Safety net even for an injected "webgpu" policy: a lying
+        // `navigator.gpu` must not trigger a 326 MB download.
         this.device = await resolveDevice();
       }
-      const dtype = this.device === "webgpu" ? "fp32" : "q8";
+      if (ios) this.device = "wasm";
+      const dtype: DtypeKind =
+        this.policy.dtype ?? (this.device === "webgpu" ? "fp32" : "q8");
       const progress_callback: ProgressCallback | undefined = onProgress
         ? (info) => {
             // transformers.js reports per-file progress (0..100) with
