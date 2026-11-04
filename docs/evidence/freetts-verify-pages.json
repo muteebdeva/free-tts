@@ -1,22 +1,22 @@
 {
-  "date": "2026-11-04T09:20:19.386Z",
+  "date": "2026-11-04T12:16:02.871Z",
   "artifact": "cloudflare-pages static export (out/)",
-  "text": "The harbor woke before the sun. Gulls argued over the fishing boats while the tide pulled at the moorings. Mara drank her coffee on the dock and watched the water turn from black to green to gold. Somewhere beyond the breakwater, a foghorn sounded twice and then fell silent. She had mended nets in this town for forty years, and she knew every rope the way other people know songs. Today the catch would be thin, the old men said, but Mara only smiled and coiled her lines.",
+  "text": "Hello. This is a verification test of the FreeTTS Pages build. Real artificial intelligence is speaking locally, inside your browser.",
   "voice": "af_heart",
   "engine": "kokoro",
   "device": "wasm",
   "sampleRate": 24000,
   "numChannels": 1,
   "bits": 16,
-  "numSamples": 650957,
-  "durationSec": 27.12,
-  "peak": 0.6675,
-  "nonSilentFraction": 0.6327,
-  "chunkCount": 3,
-  "loadMs": 10791,
-  "synthMs": 352977,
-  "realtimeFactor": 13.014,
-  "wavBytes": 1301958,
+  "numSamples": 221979,
+  "durationSec": 9.25,
+  "peak": 0.5405,
+  "nonSilentFraction": 0.6259,
+  "chunkCount": 1,
+  "loadMs": 17102,
+  "synthMs": 84856,
+  "realtimeFactor": 9.174,
+  "wavBytes": 444002,
   "checks": [
     {
       "name": "public/ort ships ort-wasm-simd-threaded.jsep.wasm",
@@ -71,66 +71,23 @@
     {
       "name": "data size matches header",
       "pass": true,
-      "detail": "1301914 vs 1301914"
+      "detail": "443958 vs 443958"
     },
     {
       "name": "duration plausible for text",
       "pass": true,
-      "detail": "27.12s"
+      "detail": "9.25s"
     },
     {
       "name": "not silent (peak > 0.02)",
       "pass": true,
-      "detail": "0.6675"
+      "detail": "0.5405"
     },
     {
       "name": "non-silent fraction > 0.05",
       "pass": true,
-      "detail": "0.6327"
-    },
-    {
-      "name": "stream mode ran",
-      "pass": true,
-      "detail": "true"
-    },
-    {
-      "name": "profile applied",
-      "pass": true,
-      "detail": "compatibility"
-    },
-    {
-      "name": "multiple chunks streamed",
-      "pass": true,
-      "detail": "chunkCount=3"
-    },
-    {
-      "name": "first chunk well before synth-done",
-      "pass": true,
-      "detail": "firstChunkMs=50350 streamMs=123515"
-    },
-    {
-      "name": "streamed PCM byte-matches batch PCM",
-      "pass": true,
-      "detail": "true"
-    },
-    {
-      "name": "fetched the jsep WASM binary",
-      "pass": true,
-      "detail": "ort-wasm-simd-threaded.jsep.wasm"
-    },
-    {
-      "name": "did NOT fetch the non-JSEP WASM binary",
-      "pass": true,
-      "detail": "ort-wasm-simd-threaded.jsep.wasm"
+      "detail": "0.6259"
     }
   ],
-  "profile": "compatibility",
-  "firstChunkMs": 50350,
-  "streamMs": 123515,
-  "pcmByteMatch": true,
-  "fetchedWasm": [
-    "ort-wasm-simd-threaded.jsep.wasm"
-  ],
-  "timeToFirstChunkRatio": 0.408,
   "pass": true
 }

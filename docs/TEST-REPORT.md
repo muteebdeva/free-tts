@@ -96,3 +96,89 @@ inference are identical, only the transport differs).
 4. MP3 download and model-manager delete are implemented + unit-tested but not
    exercised in a browser.
 5. Accessibility audit not performed beyond semantic HTML + aria-labels.
+
+## 7. Track D — technical cleanup + QA + redeploy (2026-11-04)
+
+### 7a. Tech cleanup (all verified: tsc clean, 122/122 vitest, build green)
+- **Removed dead dep `onnxruntime-web`** from package.json. Verified zero runtime
+  imports (only code comments); the transitive copy bundled by
+  `@huggingface/transformers` is untouched. Lockfile synced (it was also
+  missing the `phonemizer` direct entry — now recorded).
+- **Fixed the service-worker cache-wipe bug** (`public/sw.js`): the `activate`
+  handler deleted every cache except its own shell cache — including
+  `transformers-cache` and `kokoro-voices` — silently forcing a full ~92 MB
+  model re-download on every SW update. Now only old `freets-shell-*` caches
+  are evicted; the model/voice caches are preserved (names sourced from
+  `lib/model-store.ts`).
+- **`lame.min.js` loads on demand**: removed the global `<script>` from
+  `app/layout.tsx`; new `ensureLamejs()` in `audio/mp3-export.ts` injects
+  `/lame.min.js` once on first MP3 export (retry-safe). Verified in-browser:
+  0 requests on page load, exactly 1 at export time; MP3 bytes frame-valid.
+- Added a `?assets=1` dev/test affordance to the Studio's model load (same
+  convention as `/verify`), so the real Studio UI is drivable against the
+  local model mirror in sandboxes where the CDN is unreachable. Production
+  never sets it (no `/api/verify-assets` route there — it would 404 into the
+  honest load error).
+
+### 7b. Real issues found by QA and fixed
+- **Mobile CTA tap target 36 px → 44 px**: the primary Generate button
+  (`size="lg"` = `h-9`) measured 36 px on the 360 px viewport. Fixed with
+  `min-h-11` on the shared action button (both desktop and sticky-mobile).
+- **Slider had no accessible name**: Base UI v1 puts `aria-label` on the
+  Slider Root (exposed as a named *group*); the actual slider control in the
+  AX tree was unnamed. Our `ui/slider` wrapper now forwards `aria-label` /
+  `aria-labelledby` to the Thumb — verified in the AX tree as
+  `slider | Speaking speed val=1`.
+- **React #418 hydration pageerror**: the Studio initialized its text state
+  from `localStorage` (`useState(() => loadDraft())`), so the server-rendered
+  word/char counts mismatched the client on return visits. Fixed at the root:
+  the draft now loads in a `useEffect` (first render matches the server
+  exactly). Verified zero pageerrors on reload-with-draft in dev and in the
+  production artifact.
+
+### 7c. Browser QA — 42/42 checks PASS (headless Chromium, production artifact)
+Harness: `scripts/qa-trackd.mjs` — serves `out/` with the Pages COOP/COEP
+headers, drives the real Studio/voices/history/settings UI against the local
+model mirror (`?assets=1`), real Kokoro-82M inference (WASM).
+- **Studio**: empty→disabled / over-limit→error+disabled / Cmd+Enter generates /
+  model-load progress UI / waveform renders (120 peak bars) / click-to-seek
+  (t=3.34 s) / mute / volume / 1.5× speed / WAV byte-valid (RIFF, 24 kHz,
+  mono, 16-bit, peak 15009) / MP3 byte-valid (frame sync `ff f3`, 107 904 B) /
+  history recorded.
+- **Voice picker**: opens, search filters (7 options for "heart"), Escape closes.
+- **Voices page**: 28 Kokoro previews listed; preview enters "Speaking…" and
+  completes (spinner clears); honest "No on-device voices found" empty state
+  in headless.
+- **History→Studio**: Regenerate restores the 94-char text, pending flag
+  consumed, auto-generate runs to completion.
+- **Mobile 360 px / 768 px**: no horizontal overflow; sticky action bar sits
+  exactly above the tab bar (bar.bottom=676, tab.top=675); CTA is 44 px.
+- **Failure simulation** (CDN aborted): honest error alert
+  ("Speech generation failed: Failed to fetch"), dismisses, page responsive —
+  no hang.
+- **A11y/contrast**: 0 unnamed buttons; all form controls labelled; emerald
+  `--success` vs toast bg = 4.42:1 (light) / 7.65:1 (dark) — passes the 3:1
+  icon bar.
+- **Error audit**: zero console errors, zero page errors across all workflows.
+- **Privacy**: zero external requests during the full Studio workflow
+  (mirror-only).
+
+### 7d. Mandatory gates (final bundle) — both PASS, no mocks
+- `scripts/verify-pages.mjs`: **GATE PASSED** — 15/15 checks, real Kokoro
+  inference in the Pages artifact (133 chars → 9.25 s, 24 kHz mono 16-bit,
+  peak 0.5405, non-silent 0.63). Evidence: `docs/evidence/freetts-verify-pages.wav`.
+- `scripts/verify-gapless.mjs`: **GATE PASSED — 12/12** — 3 streamed chunks,
+  every joint overlaps by exactly the 8 ms crossfade (worst joint error
+  0.000 ms), no ≥50 ms near-zero run at any joint, stitched sample count
+  matches exactly (726 766 vs 726 766).
+
+### 7e. Known gaps remaining (honest)
+- Real-device QA (his iPhone) is still the only true validation for audio
+  playback, the audio-blocked banner path, and mobile feel — the sandbox
+  cannot do this.
+- No Safari testing; no real-hardware WebGPU measurement (VM is CPU-only).
+- The failure-simulation error text ("Failed to fetch") is honest but terse;
+  a friendlier message ("couldn't download the voice model — check your
+  connection") would be nicer.
+- System-voice engine path (Web Speech) not exercised beyond the empty state —
+  headless Chromium ships no voices.
