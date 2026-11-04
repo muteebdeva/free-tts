@@ -42,38 +42,30 @@ The `/api/verify-assets` route is a dev/test-only model mirror: it returns 404
 unless `FREETTS_VERIFY_ASSETS=1` is set. **Never set that variable in
 production.**
 
-## 3. Deploy on Cloudflare Pages
+## 3. Deploy on Cloudflare Pages (static export — tested 2026-11-04)
 
-This app is a standard Next.js App Router build. Two paths:
+`@cloudflare/next-on-pages` does **not** support Next.js 16 (peer range ends at
+15.5.2), so Pages gets a pure static export. This path is fully scripted and
+was verified end-to-end:
 
-### Option A — Vercel-style via Cloudflare's Next.js support (recommended)
+```bash
+./scripts/build-pages.sh        # PAGES_EXPORT=1 static build into out/
+node scripts/verify-pages.mjs   # serves out/ with Pages-equivalent COOP/COEP
+                                # headers, synthesizes real speech in headless
+                                # Chromium, validates the WAV bytes — GATE PASSED
+npx wrangler pages deploy out --project-name=free-tts
+```
 
-Cloudflare supports Next.js apps on Pages/Workers with the official adapter.
-Follow the current Cloudflare docs for deploying a Next.js app
-(developers.cloudflare.com/pages/framework-guides/nextjs). This path keeps
-`next.config.ts` headers and the `/api/verify-assets` route working as in dev.
+What `build-pages.sh` does: sets `PAGES_EXPORT=1` (next.config.ts switches to
+`output: "export"` and disables PPR/`cacheComponents`, which export mode
+forbids), temporarily moves the dev-only `app/api/verify-assets` route aside
+(it 404s in production anyway), and restores it afterwards. COOP/COEP headers
+come from `public/_headers` (copied into `out/`), plus a long-cache rule for
+`/_next/static/*`. Vercel deployments are unaffected (`_headers` is ignored
+there; `vercel.json` still applies).
 
-### Option B — pure static export
-
-Add `output: "export"` to `next.config.ts` and deploy the `out/` directory as
-a static Pages site. Caveats:
-
-- The dev-only `/api/verify-assets` route must stay behind its env gate (it
-  already 404s without `FREETTS_VERIFY_ASSETS=1`; do not set that variable in
-  production).
-- `next.config.ts` `headers()` are **not** applied to static exports, so the
-  COOP/COEP headers must be set via a `_headers` file placed in `public/`
-  (Pages copies `public/` into the output). Contents:
-  ```
-  /*
-    Cross-Origin-Opener-Policy: same-origin
-    Cross-Origin-Embedder-Policy: require-corp
-  ```
-- Long-caching for versioned assets:
-  ```
-  /_next/static/*
-    Cache-Control: public, max-age=31536000, immutable
-  ```
+Production model loading is unchanged: the browser fetches Kokoro weights from
+the HuggingFace CDN on first Generate and caches them locally.
 
 ## 4. PWA: manifest, icons, service worker
 

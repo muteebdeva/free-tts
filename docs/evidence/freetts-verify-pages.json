@@ -1,0 +1,72 @@
+{
+  "date": "2026-11-04T06:43:20.384Z",
+  "artifact": "cloudflare-pages static export (out/)",
+  "text": "Hello. This is a verification test of the FreeTTS Pages build. Real artificial intelligence is speaking locally, inside your browser.",
+  "voice": "af_heart",
+  "device": "wasm",
+  "sampleRate": 24000,
+  "numChannels": 1,
+  "bits": 16,
+  "numSamples": 221979,
+  "durationSec": 9.25,
+  "peak": 0.5405,
+  "nonSilentFraction": 0.6259,
+  "chunkCount": 1,
+  "loadMs": 16643,
+  "synthMs": 79411,
+  "realtimeFactor": 8.586,
+  "wavBytes": 444002,
+  "checks": [
+    {
+      "name": "page reported ok",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "WAV magic is RIFF",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "WAVE format",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "sample rate is 24000 Hz",
+      "pass": true,
+      "detail": "24000"
+    },
+    {
+      "name": "mono",
+      "pass": true,
+      "detail": "1"
+    },
+    {
+      "name": "16-bit PCM",
+      "pass": true,
+      "detail": "16"
+    },
+    {
+      "name": "data size matches header",
+      "pass": true,
+      "detail": "443958 vs 443958"
+    },
+    {
+      "name": "duration plausible for text (1.5s–20s)",
+      "pass": true,
+      "detail": "9.25s"
+    },
+    {
+      "name": "not silent (peak > 0.02)",
+      "pass": true,
+      "detail": "0.5405"
+    },
+    {
+      "name": "non-silent fraction > 0.05",
+      "pass": true,
+      "detail": "0.6259"
+    }
+  ],
+  "pass": true
+}
