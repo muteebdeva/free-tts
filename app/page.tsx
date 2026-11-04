@@ -157,9 +157,9 @@ export default function StudioPage() {
         <Card>
           <CardContent className="flex items-start gap-3 pt-6 text-sm">
             {device === "webgpu" ? (
-              <Zap className="mt-0.5 h-4 w-4 shrink-0 text-green-600" />
+              <Zap className="mt-0.5 h-4 w-4 shrink-0 text-success" />
             ) : (
-              <Cpu className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+              <Cpu className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
             )}
             <div>
               <p>

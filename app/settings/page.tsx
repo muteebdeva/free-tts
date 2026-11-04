@@ -1,10 +1,27 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Database, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import Link from "next/link";
+import {
+  ArrowRight,
+  Database,
+  History,
+  Loader2,
+  RefreshCw,
+  Trash2,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { toast } from "@/components/ui/toast";
 import { useTTS } from "@/components/tts-provider";
 import {
   deleteModelCaches,
@@ -13,6 +30,10 @@ import {
   listModelCaches,
   type CacheInfo,
 } from "@/lib/model-store";
+import {
+  clearHistory,
+  getHistory,
+} from "@/lib/history";
 import { classifyDevice, type DeviceProfile } from "@/lib/device-profile";
 
 export default function SettingsPage() {
@@ -21,6 +42,9 @@ export default function SettingsPage() {
   const [storage, setStorage] = useState<{ usage: number; quota: number } | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [clearHistoryOpen, setClearHistoryOpen] = useState(false);
+  const [historyCount, setHistoryCount] = useState(0);
   const [profile, setProfile] = useState<DeviceProfile | null>(null);
 
   const refresh = useCallback(async () => {
@@ -29,6 +53,7 @@ export default function SettingsPage() {
       const [c, s] = await Promise.all([listModelCaches(), estimateStorage()]);
       setCaches(c);
       setStorage(s);
+      setHistoryCount(getHistory().length);
     } finally {
       setRefreshing(false);
     }
@@ -45,11 +70,18 @@ export default function SettingsPage() {
   }, [refresh, kokoroLoaded]);
 
   const onDelete = async () => {
-    if (!confirm("Delete all downloaded voice models? They will re-download on next use.")) return;
+    setDeleteOpen(false);
     setDeleting(true);
     try {
+      await deleteModelCaches();
       await unloadModel();
       await refresh();
+      toast.success("Model cache cleared", "Models will re-download on next use.");
+    } catch (e) {
+      toast.error(
+        "Couldn’t clear the model cache",
+        e instanceof Error ? e.message : "Unknown error",
+      );
     } finally {
       setDeleting(false);
     }
@@ -128,7 +160,12 @@ export default function SettingsPage() {
             </div>
           ))}
           {caches.some((c) => c.entries > 0) && (
-            <Button variant="destructive" size="sm" onClick={onDelete} disabled={deleting}>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => setDeleteOpen(true)}
+              disabled={deleting}
+            >
               {deleting ? (
                 <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
               ) : (
@@ -137,6 +174,25 @@ export default function SettingsPage() {
               Delete downloaded models
             </Button>
           )}
+          <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Delete downloaded models?</DialogTitle>
+                <DialogDescription>
+                  All cached voice model files will be removed from this
+                  device. They will download again on next use.
+                </DialogDescription>
+              </DialogHeader>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setDeleteOpen(false)}>
+                  Cancel
+                </Button>
+                <Button variant="destructive" onClick={onDelete}>
+                  Delete models
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
           {storage && (
             <p className="text-xs text-muted-foreground">
               Browser storage: {formatBytes(storage.usage)} used of{" "}
@@ -147,6 +203,69 @@ export default function SettingsPage() {
           )}
         </CardContent>
       </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">History</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <History className="h-4 w-4 text-muted-foreground" />
+              <p className="text-muted-foreground">
+                {historyCount} saved {historyCount === 1 ? "entry" : "entries"} —
+                text and settings only, stored in this browser.
+              </p>
+            </div>
+            <Link href="/history">
+              <Button variant="outline" size="sm">
+                View history
+                <ArrowRight className="ml-1 h-3.5 w-3.5" />
+              </Button>
+            </Link>
+          </div>
+          {historyCount > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground hover:text-destructive"
+              onClick={() => setClearHistoryOpen(true)}
+            >
+              <Trash2 className="mr-1 h-3.5 w-3.5" />
+              Clear history
+            </Button>
+          )}
+        </CardContent>
+      </Card>
+
+      <Dialog open={clearHistoryOpen} onOpenChange={setClearHistoryOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Clear all history?</DialogTitle>
+            <DialogDescription>
+              This deletes all {historyCount} saved{" "}
+              {historyCount === 1 ? "entry" : "entries"} from this device.
+              The action can&apos;t be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setClearHistoryOpen(false)}>
+              Keep history
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                clearHistory();
+                setClearHistoryOpen(false);
+                setHistoryCount(0);
+                toast.success("History cleared");
+              }}
+            >
+              Clear all
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Card>
         <CardHeader>
