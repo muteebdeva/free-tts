@@ -25,6 +25,11 @@ export interface Voice {
    * never invented.
    */
   accent: string | null;
+  /**
+   * Upstream quality grade (e.g. "A" … "F+"), e.g. from the Kokoro voice
+   * audit. Null when the source provides no grade — never invented.
+   */
+  overallGrade: string | null;
 }
 
 export interface EngineCapabilities {

@@ -20,21 +20,18 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { toast } from "@/components/ui/toast";
 import { useTTS } from "@/components/tts-provider";
 import type { Voice } from "@/engines/engine-interface";
 import { SystemEngine } from "@/engines/system/system-engine";
 
 /**
- * Upstream Kokoro quality grade for a voice. Track B is hoisting
- * `overallGrade` out of the description string into a first-class field;
- * prefer the field when present, parse the description defensively until
- * then. Never invented — it comes from the upstream Kokoro voice audit.
+ * Upstream quality grade for a voice (first-class `overallGrade` field on
+ * Voice). Null when the source provides no grade — for system voices the
+ * Web Speech API exposes none, so it is never invented.
  */
 function gradeOf(v: Voice): string {
-  const field = (v as Voice & { overallGrade?: string }).overallGrade;
-  if (typeof field === "string" && field.length > 0) return field;
-  const m = v.description.match(/grade (\S+)/i);
-  return m ? m[1] : "–";
+  return v.overallGrade && v.overallGrade.length > 0 ? v.overallGrade : "–";
 }
 
 const GRADE_ORDER = [
@@ -128,6 +125,8 @@ export default function VoicesPage() {
     ensureVoices,
     previewVoice,
     previewingId,
+    previewError,
+    clearPreviewError,
   } = useTTS();
   const [query, setQuery] = useState("");
   const [accent, setAccent] = useState("all");
@@ -145,6 +144,15 @@ export default function VoicesPage() {
   useEffect(() => {
     void ensureVoices();
   }, [ensureVoices]);
+
+  // Preview failures are recorded (not thrown) by the provider — surface
+  // them as toasts here instead of leaving the user guessing.
+  useEffect(() => {
+    if (previewError) {
+      toast.error("Preview failed", previewError);
+      clearPreviewError();
+    }
+  }, [previewError, clearPreviewError]);
 
   useEffect(() => {
     let cancelled = false;

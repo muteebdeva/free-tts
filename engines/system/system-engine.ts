@@ -37,6 +37,7 @@ function toVoice(v: SpeechSynthesisVoice, index: number): Voice {
     language: v.lang || "und",
     gender: null, // the API does not expose gender — never invented
     accent: null,
+    overallGrade: null, // the API exposes no quality grade — never invented
     description: `System voice · ${v.lang || "unknown language"} · on-device`,
   };
 }

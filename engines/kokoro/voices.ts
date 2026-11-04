@@ -60,6 +60,8 @@ function toVoice(id: string, raw: RawVoice): Voice {
     language,
     gender: raw.gender === "Female" ? "female" : "male",
     accent,
+    // Real field — callers must not re-parse this from the description.
+    overallGrade: raw.overallGrade,
     // Grade is upstream's own audit label; surfaced so users can pick better voices.
     description: `${accent} English · ${raw.gender} · upstream quality grade ${raw.overallGrade}`,
   };
