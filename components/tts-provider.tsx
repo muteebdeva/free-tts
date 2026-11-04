@@ -46,6 +46,7 @@ import {
   consumeStaleGenerateFlag,
   markGenerateStart,
 } from "@/lib/jetsam-sentinel";
+import { recordHistoryEntry } from "@/lib/history";
 import { DEFAULT_VOICE_ID } from "@/engines/kokoro/voices";
 
 /**
@@ -138,6 +139,14 @@ interface TTSContextValue {
   unblockAudio: () => void;
   /** Raw PCM of the last generation (for MP3 export). Null for system voices. */
   getAudioData: () => { samples: Float32Array; sampleRate: number } | null;
+  /**
+   * Last voice-preview failure message (null when none). The preview call
+   * swallows errors internally so playback state stays clean — the UI
+   * surfaces this via toast instead of leaving the user guessing.
+   */
+  previewError: string | null;
+  /** Clear the preview error after the UI has surfaced it. */
+  clearPreviewError: () => void;
   /** Load the voice list (static metadata — does NOT download the model). */
   ensureVoices: () => Promise<void>;
   /** Unload the model from memory and delete all cached model files. */
@@ -173,6 +182,12 @@ export function TTSProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [previewingId, setPreviewingId] = useState<string | null>(null);
   /**
+   * Voice-preview failure message. Set (not thrown) so the preview lifecycle
+   * stays clean — the Studio surfaces it as a toast with the honest cause.
+   */
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const clearPreviewError = useCallback(() => setPreviewError(null), []);
+  /**
    * True when audio output appears blocked after generation started: the
    * Web Audio context would not run and the <audio> fallback's play() was
    * also refused. Shows a "tap to enable sound" banner instead of leaving
@@ -191,9 +206,23 @@ export function TTSProvider({ children }: { children: ReactNode }) {
   const kokoroLoadedRef = useRef(false);
   const voicesRef = useRef<Voice[]>([]);
   voicesRef.current = voices;
+  const systemVoicesRef = useRef<Voice[]>([]);
+  systemVoicesRef.current = systemVoices;
   const profileRef = useRef<DeviceProfile | null>(null);
   const engineTouchedRef = useRef(false);
   const streamRef = useRef<StreamState | null>(null);
+  /**
+   * What the current (or last) generation was asked to do — captured at
+   * generate() time so the finish callbacks can record a History entry
+   * without depending on UI state that may have changed since.
+   */
+  const genMetaRef = useRef<{
+    text: string;
+    voiceId: string;
+    voiceName: string;
+    speed: number;
+    engine: EngineChoice;
+  } | null>(null);
 
   const fail = useCallback((message: string) => {
     setError(message);
@@ -261,6 +290,15 @@ export function TTSProvider({ children }: { children: ReactNode }) {
       getEngineManager().cancel();
       systemEngineRef.current?.unload().catch(() => undefined);
       clearGenerateFlag();
+      // A finished file belongs to the engine that made it: switching
+      // engines discards it (the Studio toasts this honestly) rather than
+      // leaving a stale player behind.
+      setAudioUrl((old) => {
+        if (old) URL.revokeObjectURL(old);
+        return null;
+      });
+      setAudioSampleRate(null);
+      audioDataRef.current = null;
       setEngineChoiceState(e);
       engineChoiceRef.current = e;
       setPhase("idle");
@@ -311,6 +349,31 @@ export function TTSProvider({ children }: { children: ReactNode }) {
   }, []);
 
   /** All chunks received AND the queue drained: generation is fully done. */
+  const recordGen = useCallback((s: StreamState | null, partial: boolean) => {
+    const meta = genMetaRef.current;
+    if (!meta) return;
+    try {
+      let durationSec: number | null = null;
+      if (s) {
+        let total = 0;
+        for (const p of s.pcmParts) total += p.length;
+        if (total > 0) durationSec = total / s.sampleRate;
+      }
+      recordHistoryEntry({
+        engine: meta.engine,
+        voiceId: meta.voiceId,
+        voiceName: meta.voiceName,
+        speed: meta.speed,
+        charCount: meta.text.length,
+        durationSec,
+        text: meta.text,
+        partial,
+      });
+    } catch {
+      // History is best-effort: never break generation over a write.
+    }
+  }, []);
+
   const finishStreamReady = useCallback((s: StreamState) => {
     if (streamRef.current !== s) return;
     streamRef.current = null;
@@ -319,10 +382,11 @@ export function TTSProvider({ children }: { children: ReactNode }) {
       s.gapless.dispose();
       s.gapless = null;
     }
+    recordGen(s, false);
     setPhase("ready");
     setSynthProgress(null);
     clearGenerateFlag();
-  }, []);
+  }, [recordGen]);
 
   /**
    * Stop: halt generation, silence playback, revoke queued chunk URLs
@@ -358,6 +422,7 @@ export function TTSProvider({ children }: { children: ReactNode }) {
       s.playing = false;
       if (s.pcmParts.length > 0) {
         buildStreamAudioUrl(s);
+        recordGen(s, true);
         // Keep N-of-M so the UI can say "Stopped — partial audio (N of M)".
         setPhase("ready-partial");
       } else {
@@ -366,7 +431,7 @@ export function TTSProvider({ children }: { children: ReactNode }) {
       }
       clearGenerateFlag();
     },
-    [buildStreamAudioUrl],
+    [buildStreamAudioUrl, recordGen],
   );
 
   /** Drop stream state without keeping audio (superseded / engine switch). */
@@ -666,6 +731,19 @@ export function TTSProvider({ children }: { children: ReactNode }) {
       markGenerateStart();
       teardownStream();
 
+      // Capture what was asked for — the finish callbacks record History
+      // from this, not from UI state that may have moved on.
+      const genEngine = engineChoiceRef.current;
+      const genVoiceList =
+        genEngine === "kokoro" ? voicesRef.current : systemVoicesRef.current;
+      genMetaRef.current = {
+        text,
+        voiceId,
+        voiceName: genVoiceList.find((v) => v.id === voiceId)?.name ?? voiceId,
+        speed,
+        engine: genEngine,
+      };
+
       // Gapless playback needs the AudioContext created AND resumed
       // synchronously inside this tap gesture — iOS Safari will not unlock
       // it if creation is deferred past the click handler. unlock() also
@@ -692,6 +770,8 @@ export function TTSProvider({ children }: { children: ReactNode }) {
         try {
           await systemEngineRef.current.synthesize(text, voiceId, { speed });
           setPhase("ready");
+          // System voices leave no PCM: duration is genuinely unknown.
+          recordGen(null, false);
         } catch (e) {
           if (e instanceof DOMException && e.name === "AbortError") setPhase("idle");
           else fail(e instanceof Error ? e.message : String(e));
@@ -721,6 +801,7 @@ export function TTSProvider({ children }: { children: ReactNode }) {
       fail,
       dismissError,
       generateNeural,
+      recordGen,
     ],
   );
 
@@ -817,6 +898,7 @@ export function TTSProvider({ children }: { children: ReactNode }) {
         return;
       }
       setPreviewingId(voice.id);
+      setPreviewError(null);
       try {
         if (engine === "system") {
           if (!systemEngineRef.current) systemEngineRef.current = new SystemEngine();
@@ -832,14 +914,22 @@ export function TTSProvider({ children }: { children: ReactNode }) {
           const p = profileRef.current;
           const throttledLoad = createThrottledProgress((f) => setLoadProgress(f));
           if (!slot.loadedRef.current) {
-            const dev = await mgr.loadModel(throttledLoad, {
-              engineId: "kokoro",
-              numThreads: p && p.ortThreads > 0 ? p.ortThreads : undefined,
-              sameOriginWasm: p?.ortWasmBase === "same-origin",
-            });
-            setDevice(dev);
-            slot.setLoaded(true);
-            slot.loadedRef.current = true;
+            try {
+              const dev = await mgr.loadModel(throttledLoad, {
+                engineId: "kokoro",
+                numThreads: p && p.ortThreads > 0 ? p.ortThreads : undefined,
+                sameOriginWasm: p?.ortWasmBase === "same-origin",
+              });
+              setDevice(dev);
+              slot.setLoaded(true);
+              slot.loadedRef.current = true;
+            } catch (e) {
+              // Honest cause: a preview that triggers the first model
+              // download fails at the download, not at "synthesis".
+              throw new Error(
+                `The preview needs the voice model (~92 MB, one-time download), which failed to load: ${e instanceof Error ? e.message : String(e)}`,
+              );
+            }
           }
           const result = await mgr.synthesize(PREVIEW_TEXT(voice.name), voice.id, 1, {}, "kokoro");
           const wav = encodeWav(result.samples, { sampleRate: result.sampleRate });
@@ -852,8 +942,10 @@ export function TTSProvider({ children }: { children: ReactNode }) {
           el.onended = () => setPreviewingId(null);
           await el.play().catch(() => setPreviewingId(null));
         }
-      } catch {
+      } catch (e) {
+        // Surfaced by the Studio as a toast — never a silent spinner clear.
         setPreviewingId(null);
+        setPreviewError(e instanceof Error ? e.message : "Voice preview failed.");
       }
     },
     [],
@@ -887,6 +979,8 @@ export function TTSProvider({ children }: { children: ReactNode }) {
       audioBlocked,
       unblockAudio,
       getAudioData,
+      previewError,
+      clearPreviewError,
       ensureVoices: ensureKokoroVoices,
       unloadModel,
       wasInterrupted,
@@ -897,7 +991,8 @@ export function TTSProvider({ children }: { children: ReactNode }) {
       systemVoices, phase, synthProgress, audioUrl, audioSampleRate, error,
       generate, cancel, previewVoice, previewingId, dismissError,
       audioBlocked, unblockAudio,
-      getAudioData, ensureKokoroVoices, unloadModel, wasInterrupted,
+      getAudioData, previewError, clearPreviewError,
+      ensureKokoroVoices, unloadModel, wasInterrupted,
     ],
   );
 
