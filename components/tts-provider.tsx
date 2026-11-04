@@ -907,6 +907,8 @@ export function TTSProvider({ children }: { children: ReactNode }) {
             voice.id,
             {},
           );
+          // No audio element here, so clear the spinner explicitly.
+          setPreviewingId(null);
         } else {
           // Neural engine (kokoro) via the worker.
           const slot = { loadedRef: kokoroLoadedRef, setLoaded: setKokoroLoaded };

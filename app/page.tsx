@@ -466,10 +466,11 @@ export default function StudioPage() {
       </Card>
 
       {/* Spacer so the mobile sticky bar never covers content. */}
-      <div aria-hidden="true" className="h-20 md:hidden" />
+      <div aria-hidden="true" className="h-24 md:hidden" />
 
-      {/* Sticky bottom action bar — mobile only. */}
-      <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background/95 px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur md:hidden">
+      {/* Sticky bottom action bar — mobile only, stacked above the global
+          mobile tab bar (h-16 + safe area). */}
+      <div className="fixed inset-x-0 bottom-[calc(4rem+env(safe-area-inset-bottom))] z-40 border-t border-border bg-background/95 px-4 py-3 backdrop-blur md:hidden">
         {actionButton("w-full")}
         <p className="mt-1.5 text-center">
           <ShortcutHint />
