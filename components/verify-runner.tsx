@@ -81,8 +81,12 @@ export default function VerifyRunner() {
         if (!cancelled) setStatus("done ✓");
       } catch (e) {
         const message = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
-        window.__ftts_verify = { ok: false, error: message };
-        if (!cancelled) setStatus(`error: ${message}`);
+        // A cancelled (superseded) run must never publish its result —
+        // otherwise it races the run that replaced it.
+        if (!cancelled) {
+          window.__ftts_verify = { ok: false, error: message };
+          setStatus(`error: ${message}`);
+        }
       }
     })();
     return () => {
