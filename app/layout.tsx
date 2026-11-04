@@ -5,6 +5,7 @@ import { ThemeProvider } from "@/components/theme-provider";
 import { TTSProvider } from "@/components/tts-provider";
 import { SiteHeader } from "@/components/site-header";
 import { SwRegister } from "@/components/sw-register";
+import { Toaster } from "@/components/ui/toast";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -54,24 +55,40 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           <SwRegister />
           <TTSProvider>
             <SiteHeader />
-            <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8">
+            {/* pb-24 clears the fixed mobile tab bar (h-16 + safe area);
+                md:pb-8 restores the desktop rhythm. */}
+            <main className="mx-auto w-full max-w-6xl flex-1 px-4 pt-8 pb-24 md:pb-8">
               {children}
             </main>
-            <footer className="border-t py-6">
-              <div className="mx-auto max-w-6xl px-4 text-sm text-muted-foreground">
-                <p>
-                  FreeTTS — free and open-source (GPL-3.0-or-later). Speech is
-                  synthesized on your device; your text never leaves it.
-                </p>
-                <p className="mt-1">
-                  Engine: Kokoro-82M (Apache-2.0) via kokoro-js ·{" "}
-                  <span className="underline underline-offset-4">
-                    English voices only in this version
-                  </span>
-                  .
-                </p>
+            <footer className="border-t">
+              <div className="mx-auto max-w-6xl px-4 py-8">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="space-y-1 text-sm text-muted-foreground">
+                    <p className="font-medium text-foreground">FreeTTS</p>
+                    <p>
+                      Free and open-source (GPL-3.0-or-later). Speech is
+                      synthesized on your device; your text never leaves it.
+                    </p>
+                    <p>
+                      Engine: Kokoro-82M (Apache-2.0) via kokoro-js ·
+                      English voices only in this version.
+                    </p>
+                  </div>
+                  <nav
+                    className="flex gap-5 text-sm text-muted-foreground"
+                    aria-label="Footer"
+                  >
+                    <a href="/privacy" className="transition-colors hover:text-foreground">
+                      Privacy
+                    </a>
+                    <a href="/settings" className="transition-colors hover:text-foreground">
+                      Settings
+                    </a>
+                  </nav>
+                </div>
               </div>
             </footer>
+            <Toaster />
           </TTSProvider>
         </ThemeProvider>
       </body>
