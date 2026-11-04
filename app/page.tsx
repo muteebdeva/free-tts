@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Cpu,
@@ -10,6 +9,7 @@ import {
   ShieldCheck,
   Square,
   Volume2,
+  X,
   Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -24,15 +24,38 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { toast } from "@/components/ui/toast";
 import {
   DEFAULT_VOICE_ID,
   MAX_CHARS,
   useTTS,
   type EngineChoice,
 } from "@/components/tts-provider";
+import {
+  consumePendingGenerate,
+  getHistoryEntry,
+  loadDraft,
+  saveDraft,
+} from "@/lib/history";
 import { TextEditor } from "@/components/studio/text-editor";
 import { VoicePicker } from "@/components/studio/voice-picker";
 import { AudioPlayer } from "@/components/studio/audio-player";
+
+function Kbd({ children }: { children: React.ReactNode }) {
+  return (
+    <kbd className="rounded border bg-muted px-1 py-px font-sans text-[10px] font-medium">
+      {children}
+    </kbd>
+  );
+}
+
+function ShortcutHint() {
+  return (
+    <span className="text-xs text-muted-foreground">
+      <Kbd>Ctrl</Kbd>/<Kbd>⌘</Kbd> + <Kbd>Enter</Kbd> to generate
+    </span>
+  );
+}
 
 export default function StudioPage() {
   const tts = useTTS();
@@ -41,13 +64,33 @@ export default function StudioPage() {
     voices, systemVoices,
     phase, synthProgress, loadProgress, kokoroLoading, device,
     error, dismissError, ensureVoices, profile, wasInterrupted,
-    audioBlocked, unblockAudio,
+    audioBlocked, unblockAudio, audioUrl,
   } = tts;
 
-  const [text, setText] = useState("");
+  // Draft persistence: text survives navigation (debounced write).
+  const [text, setText] = useState(() => loadDraft());
   const [voiceId, setVoiceId] = useState(DEFAULT_VOICE_ID);
   const [speed, setSpeed] = useState(1);
   const [showSentinel, setShowSentinel] = useState(false);
+  const [autoGen, setAutoGen] = useState<{
+    text: string;
+    voiceId: string;
+    speed: number;
+    engine: EngineChoice;
+  } | null>(null);
+
+  const draftTimer = useRef<number | null>(null);
+  const handleTextChange = useCallback((t: string) => {
+    setText(t);
+    if (draftTimer.current !== null) window.clearTimeout(draftTimer.current);
+    draftTimer.current = window.setTimeout(() => saveDraft(t), 400);
+  }, []);
+  useEffect(
+    () => () => {
+      if (draftTimer.current !== null) window.clearTimeout(draftTimer.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     void ensureVoices();
@@ -58,6 +101,27 @@ export default function StudioPage() {
   useEffect(() => {
     if (wasInterrupted()) setShowSentinel(true);
   }, [wasInterrupted]);
+
+  // History → Studio handoff: consume the one-shot flag, restore the entry
+  // into Studio state, and auto-generate once the engine is ready.
+  useEffect(() => {
+    const id = consumePendingGenerate();
+    if (!id) return;
+    const entry = getHistoryEntry(id);
+    if (!entry) return; // flag consumed either way — nothing to restore
+    setText(entry.text);
+    saveDraft(entry.text);
+    setVoiceId(entry.voiceId);
+    setSpeed(entry.speed);
+    setEngineChoice(entry.engine);
+    setAutoGen({
+      text: entry.text,
+      voiceId: entry.voiceId,
+      speed: entry.speed,
+      engine: entry.engine,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const voiceList = engineChoice === "kokoro" ? voices : systemVoices;
 
@@ -73,12 +137,41 @@ export default function StudioPage() {
     }
   }, [voiceList, voiceId, engineChoice]);
 
+  // Fire the pending auto-generate once the target engine is active and its
+  // voice list has arrived (voiceId here is already auto-corrected above).
+  useEffect(() => {
+    if (!autoGen) return;
+    if (engineChoice !== autoGen.engine) return;
+    if (voiceList.length === 0) return;
+    const gen = autoGen;
+    setAutoGen(null);
+    void tts.generate(gen.text, voiceId, gen.speed);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoGen, engineChoice, voiceList, voiceId]);
+
   const busy =
     phase === "loading-model" ||
     phase === "synthesizing" ||
     phase === "streaming" ||
     kokoroLoading;
   const canGenerate = !busy && text.trim().length > 0 && text.length <= MAX_CHARS;
+
+  const doGenerate = useCallback(() => {
+    if (!canGenerate) return;
+    void tts.generate(text, voiceId, speed);
+  }, [canGenerate, tts, text, voiceId, speed]);
+
+  // Keyboard shortcut: Cmd/Ctrl+Enter generates from anywhere on the page.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+        e.preventDefault();
+        doGenerate();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [doGenerate]);
 
   const statusLine = useMemo(() => {
     if (phase === "loading-model")
@@ -100,8 +193,47 @@ export default function StudioPage() {
   }, [phase, loadProgress, synthProgress]);
 
   const onEngineChange = (e: EngineChoice) => {
+    // A finished file belongs to the engine that made it — the provider
+    // clears it on switch, so say so honestly instead of letting it vanish
+    // silently.
+    const hadAudio =
+      (phase === "ready" || phase === "ready-partial") && audioUrl !== null;
     setEngineChoice(e);
+    if (hadAudio) {
+      toast("Switched engine", {
+        description: `Switched to ${e === "kokoro" ? "Kokoro AI voices" : "System voices"} — the previous audio was cleared.`,
+      });
+    }
   };
+
+  const generateLabel = engineChoice === "kokoro" ? "Generate speech" : "Speak";
+
+  const actionButton = (className?: string) =>
+    busy ? (
+      <Button
+        variant={phase === "streaming" ? "secondary" : "destructive"}
+        onClick={tts.cancel}
+        size="lg"
+        className={className}
+        title={
+          phase === "streaming"
+            ? "Stop generating — keeps the audio generated so far"
+            : "Cancel"
+        }
+      >
+        <Square className="mr-2 h-4 w-4" />
+        {phase === "streaming" ? "Stop" : "Cancel"}
+      </Button>
+    ) : (
+      <Button
+        onClick={doGenerate}
+        disabled={!canGenerate}
+        size="lg"
+        className={className}
+      >
+        {generateLabel}
+      </Button>
+    );
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -157,9 +289,9 @@ export default function StudioPage() {
         <Card>
           <CardContent className="flex items-start gap-3 pt-6 text-sm">
             {device === "webgpu" ? (
-              <Zap className="mt-0.5 h-4 w-4 shrink-0 text-success" />
+              <Zap className="mt-0.5 h-4 w-4 shrink-0 text-green-600" />
             ) : (
-              <Cpu className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+              <Cpu className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
             )}
             <div>
               <p>
@@ -191,8 +323,8 @@ export default function StudioPage() {
           <CardContent className="flex items-start gap-3 pt-6 text-sm">
             <Info className="mt-0.5 h-4 w-4 shrink-0" />
             <p>
-              <strong>System voices</strong> — your device&apos;s built-in voices.
-              Instant, no download. Quality varies by device, and audio
+              <strong>System voices</strong> — your device&apos;s built-in
+              voices. Instant, no download. Quality varies by device, and audio
               can&apos;t be downloaded — it plays only. Only on-device voices
               are used; nothing is sent to the cloud.
             </p>
@@ -200,7 +332,12 @@ export default function StudioPage() {
         </Card>
       )}
 
-      <TextEditor text={text} onChange={setText} disabled={busy} />
+      <TextEditor
+        text={text}
+        onChange={handleTextChange}
+        disabled={busy}
+        speed={speed}
+      />
 
       <div className="grid gap-6 sm:grid-cols-2">
         <VoicePicker voiceId={voiceId} onChange={setVoiceId} disabled={busy} />
@@ -226,37 +363,13 @@ export default function StudioPage() {
         </div>
       </div>
 
-      {/* Generate / stop / cancel.
-          During streaming the button is Stop: generation halts but the
-          partial audio is kept (playable + exportable). */}
-      <div className="flex items-center gap-3">
-        {busy ? (
-          <Button
-            variant={phase === "streaming" ? "secondary" : "destructive"}
-            onClick={tts.cancel}
-            className="flex-1 sm:flex-none sm:px-8"
-            title={
-              phase === "streaming"
-                ? "Stop generating — keeps the audio generated so far"
-                : "Cancel"
-            }
-          >
-            <Square className="mr-2 h-4 w-4" />
-            {phase === "streaming" ? "Stop" : "Cancel"}
-          </Button>
-        ) : (
-          <Button
-            onClick={() => tts.generate(text, voiceId, speed)}
-            disabled={!canGenerate}
-            className="flex-1 sm:flex-none sm:px-8"
-            size="lg"
-          >
-            Generate speech
-          </Button>
-        )}
-        {busy && (
-          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-        )}
+      {/* Generate / stop / cancel (desktop). Mobile uses the sticky bottom
+          bar below. During streaming the button is Stop: generation halts
+          but the partial audio is kept (playable + exportable). */}
+      <div className="hidden items-center gap-4 md:flex">
+        {actionButton("px-8")}
+        {busy && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+        {!busy && <ShortcutHint />}
       </div>
       {phase === "streaming" && (
         <p className="text-xs text-muted-foreground">
@@ -277,7 +390,9 @@ export default function StudioPage() {
       {(phase === "synthesizing" || phase === "streaming") && (
         <div className="space-y-2">
           {synthProgress && synthProgress.total > 1 && (
-            <Progress value={(synthProgress.done / synthProgress.total) * 100} />
+            <Progress
+              value={(synthProgress.done / synthProgress.total) * 100}
+            />
           )}
           {statusLine && (
             <p className="text-sm text-muted-foreground">{statusLine}</p>
@@ -349,6 +464,17 @@ export default function StudioPage() {
           </p>
         </CardContent>
       </Card>
+
+      {/* Spacer so the mobile sticky bar never covers content. */}
+      <div aria-hidden="true" className="h-20 md:hidden" />
+
+      {/* Sticky bottom action bar — mobile only. */}
+      <div className="fixed inset-x-0 bottom-0 z-40 border-t border-border bg-background/95 px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur md:hidden">
+        {actionButton("w-full")}
+        <p className="mt-1.5 text-center">
+          <ShortcutHint />
+        </p>
+      </div>
     </div>
   );
 }
