@@ -19,8 +19,11 @@ see the environment note.
 | Metric | Value |
 |---|---|
 | Model load (download + init + voice), cold | **12.3 s** (localhost mirror; production CDN will be slower) |
-| Synthesis: 135 chars → 9.17 s of 24 kHz mono audio | **63.8 s** |
-| Real-time factor (synth time ÷ audio duration) | **6.96** (≈ 0.14× real-time) |
+| Synthesis (dev build): 135 chars → 9.17 s audio | **63.8 s** → RTF 6.96 (≈ 0.14×) |
+| Synthesis (prod build): 68 chars → 4.24 s audio | **20.2 s** → RTF 4.77 (≈ 0.21×) |
+
+(Both runs are CPU-only WASM. The prod webpack bundle synthesizes faster than
+the dev/Turbopack bundle; the runs also differ in text length.)
 | Time to first audio | not measured separately (single 9.17 s chunk; streaming not used in v1) |
 | Peak memory | not measured (no reliable headless API; see below) |
 | WAV encode (220,131 samples → 16-bit PCM) | < 100 ms (in-page, negligible) |

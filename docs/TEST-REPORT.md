@@ -64,9 +64,18 @@ inference are identical, only the transport differs).
 | Model delete + re-download | Implemented; NOT YET TESTED |
 | PWA offline generation | NOT YET TESTED |
 
-## 4. Production build
+## 4. Production build — PASS
 
-`npm run build` — result recorded in `docs/COMPATIBILITY.md`.
+- `npm run build` succeeds (Next 16.4.5, webpack production build).
+- **Second gate on the production bundle** (`scripts/prod-verify.mjs`,
+  2026-11-04): same real-audio check against `next start` — voice `bf_emma`
+  (British English), 68 chars → 4.24 s of 24 kHz speech (101,847 samples,
+  peak 0.761, non-silent 0.62, header-consistent). Evidence:
+  `docs/evidence/freetts-verify-prod-bf_emma.wav`. Load 15.4 s, synthesis
+  20.2 s → **RTF 4.77** (prod bundle faster than dev's 6.96).
+- PWA wiring verified on the prod build (`scripts/pwa-check.mjs`): service
+  worker registered (scope `/`, state `activated`), manifest served as
+  `application/manifest+json`, `/sw.js` and icon correct content types.
 
 ## 5. Manual verification (dev server + headless browser)
 
