@@ -83,9 +83,6 @@ export function TextEditor({
         className="min-h-64 resize-y text-base leading-relaxed"
         aria-label="Text to convert to speech"
         aria-describedby="studio-char-limit"
-        // The draft is restored from localStorage on the client only — the
-        // server always renders empty. This is an expected, benign mismatch.
-        suppressHydrationWarning
       />
       <div className="flex flex-wrap items-center gap-2">
         <Button

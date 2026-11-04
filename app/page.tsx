@@ -68,7 +68,13 @@ export default function StudioPage() {
   } = tts;
 
   // Draft persistence: text survives navigation (debounced write).
-  const [text, setText] = useState(() => loadDraft());
+  // The draft lives in localStorage (client-only), so it MUST load in an
+  // effect — initializing useState from it would hydrate a different value
+  // than the server rendered (React #418 pageerror).
+  const [text, setText] = useState("");
+  useEffect(() => {
+    setText(loadDraft());
+  }, []);
   const [voiceId, setVoiceId] = useState(DEFAULT_VOICE_ID);
   const [speed, setSpeed] = useState(1);
   const [showSentinel, setShowSentinel] = useState(false);
