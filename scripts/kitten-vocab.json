@@ -1,0 +1,7 @@
+{
+  "_provenance": "KittenML/KittenTTS kittentts_legacy/onnx_model.py TextCleaner (Apache-2.0), extracted 2026-11-04",
+  "pad": "$",
+  "punctuation": ";:,.!?¡¿—…\"«»\"\" ",
+  "letters": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+  "ipa": "ɑɐɒæɓʙβɔɕçɗɖðʤəɘɚɛɜɝɞɟʄɡɠɢʛɦɧħɥʜɨɪʝɭɬɫɮʟɱɯɰŋɳɲɴøɵɸθœɶʘɹɺɾɻʀʁɽʂʃʈʧʉʊʋⱱʌɣɤʍχʎʏʑʐʒʔʡʕʢǀǁǂǃˈˌːˑʼʴʰʱʲʷˠˤ˞↓↑→↗↘'̩'ᵻ"
+}

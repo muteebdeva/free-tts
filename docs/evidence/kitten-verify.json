@@ -1,0 +1,72 @@
+{
+  "date": "2026-11-04T07:39:01.243Z",
+  "engine": "kitten-tts-nano-0.8-int8 (KittenML/kitten-tts-nano-0.8-int8, Apache-2.0)",
+  "modelBytes": 24369971,
+  "voicesNpzBytes": 3278902,
+  "phonemizer": "phonemizer@1.2.1 (xenova; bundles espeak-ng GPL-3.0 — already a kokoro-js dep)",
+  "ort": "onnxruntime-web (wasm EP), threads<=4",
+  "voice": "expr-voice-2-f (Bella)",
+  "sampleRate": 24000,
+  "numSamples": 313600,
+  "durationSec": 13.07,
+  "peak": 0.545,
+  "nonSilentFraction": 0.4785,
+  "loadMs": 5882,
+  "phonemizeMs": 1185,
+  "synthMs": 27790,
+  "realtimeFactor": 2.127,
+  "text": "Hello. This is a verification test of the KittenTTS Nano engine. Real neural speech, synthesized locally in your browser.",
+  "checks": [
+    {
+      "name": "page reported ok",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "WAV magic is RIFF",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "WAVE format",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "sample rate is 24000 Hz",
+      "pass": true,
+      "detail": "24000"
+    },
+    {
+      "name": "mono",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "16-bit PCM",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "data size matches header",
+      "pass": true,
+      "detail": "627200 vs 627200"
+    },
+    {
+      "name": "duration plausible (1.5s–30s)",
+      "pass": true,
+      "detail": "13.07s"
+    },
+    {
+      "name": "not silent (peak > 0.02)",
+      "pass": true,
+      "detail": "0.5450"
+    },
+    {
+      "name": "non-silent fraction > 0.05",
+      "pass": true,
+      "detail": "0.4785"
+    }
+  ],
+  "pass": true
+}
