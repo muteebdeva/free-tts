@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="FreeTTS logo">
+  <title>FreeTTS — sound waves from a microphone capsule</title>
+  <!-- Original design. Rounded dark-slate tile + white mic capsule, flanked
+       by teal soundwave bars of varying heights. -->
+  <rect x="0" y="0" width="512" height="512" rx="112" fill="#0f172a"/>
+  <!-- soundwave bars, left -->
+  <g fill="#2dd4bf" opacity="0.9">
+    <rect x="52" y="226" width="26" height="60" rx="13"/>
+    <rect x="90" y="196" width="26" height="120" rx="13"/>
+    <rect x="128" y="236" width="26" height="40" rx="13"/>
+    <rect x="166" y="166" width="26" height="180" rx="13"/>
+    <rect x="320" y="166" width="26" height="180" rx="13"/>
+    <rect x="358" y="236" width="26" height="40" rx="13"/>
+    <rect x="396" y="196" width="26" height="120" rx="13"/>
+    <rect x="434" y="226" width="26" height="60" rx="13"/>
+  </g>
+  <!-- microphone capsule -->
+  <rect x="216" y="150" width="80" height="130" rx="40" fill="#f1f5f9"/>
+  <rect x="216" y="150" width="80" height="130" rx="40" fill="none" stroke="#0f172a" stroke-width="10"/>
+  <!-- grille slots -->
+  <g fill="#0f172a" opacity="0.55">
+    <rect x="232" y="172" width="48" height="8" rx="4"/>
+    <rect x="232" y="190" width="48" height="8" rx="4"/>
+    <rect x="232" y="208" width="48" height="8" rx="4"/>
+  </g>
+  <!-- mic stand -->
+  <path d="M 256 292 v 56 M 216 372 h 80" stroke="#f1f5f9" stroke-width="20" stroke-linecap="round" fill="none"/>
+  <circle cx="256" cy="372" r="10" fill="#2dd4bf"/>
+</svg>

@@ -89,7 +89,7 @@ self.onmessage = async (event: MessageEvent<InMessage>) => {
         break;
       }
       case "voices": {
-        if (!engine.isLoaded()) await engine.load();
+        // The voice registry is static metadata — no model download needed.
         post({ type: "voices", requestId: msg.requestId, voices: await engine.getVoices() });
         break;
       }
