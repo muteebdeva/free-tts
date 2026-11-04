@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Download,
   Loader2,
@@ -9,6 +9,7 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import {
@@ -18,7 +19,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { computePeaks } from "@/lib/waveform";
 import { useTTS } from "@/components/tts-provider";
+
+const WAVE_BARS = 120;
 
 function fmt(sec: number): string {
   if (!Number.isFinite(sec) || sec < 0) return "0:00";
@@ -29,13 +33,17 @@ function fmt(sec: number): string {
 
 /**
  * Audio player for generated speech.
+ *
  * Plays the WAV blob via a native <audio> element (correct sample rate comes
- * from the file itself). Seek, volume, playback speed, WAV + MP3 download.
- * MP3 encoding runs locally via lamejs — no server involved.
+ * from the file itself). A waveform rendered from the actual retained PCM
+ * (click to seek) sits above the accessible seek slider; volume, playback
+ * speed, WAV + MP3 download. MP3 encoding runs locally via lamejs — no
+ * server involved.
  */
 export function AudioPlayer() {
-  const { audioUrl, audioSampleRate, getAudioData } = useTTS();
+  const { audioUrl, audioSampleRate, getAudioData, phase } = useTTS();
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const waveRef = useRef<HTMLDivElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [current, setCurrent] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -51,13 +59,38 @@ export function AudioPlayer() {
     setDuration(0);
   }, [audioUrl]);
 
+  // Peaks computed from the real retained PCM — never faked.
+  const peaks = useMemo(() => {
+    if (!audioUrl) return [];
+    const data = getAudioData();
+    if (!data) return [];
+    return computePeaks(data.samples, WAVE_BARS);
+  }, [audioUrl, getAudioData]);
+
   if (!audioUrl) return null;
+
+  const playedFrac = duration > 0 ? Math.min(1, current / duration) : 0;
 
   const toggle = () => {
     const el = audioRef.current;
     if (!el) return;
     if (el.paused) void el.play();
     else el.pause();
+  };
+
+  const seekToFraction = (frac: number) => {
+    const el = audioRef.current;
+    const t = Math.min(1, Math.max(0, frac)) * (duration || 0);
+    if (el && Number.isFinite(t)) {
+      el.currentTime = t;
+      setCurrent(t);
+    }
+  };
+
+  const onWaveClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    seekToFraction((e.clientX - rect.left) / rect.width);
   };
 
   const downloadWav = () => {
@@ -99,7 +132,10 @@ export function AudioPlayer() {
   };
 
   return (
-    <div className="rounded-xl border bg-card p-4 shadow-sm">
+    <section
+      aria-label="Generated audio"
+      className="rounded-xl border bg-card p-4 shadow-sm sm:p-5"
+    >
       <audio
         ref={audioRef}
         src={audioUrl}
@@ -110,11 +146,62 @@ export function AudioPlayer() {
         onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
         preload="metadata"
       />
-      <div className="flex items-center gap-3">
-        <Button size="icon" onClick={toggle} aria-label={playing ? "Pause" : "Play"}>
-          {playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h3 className="text-sm font-medium">Generated audio</h3>
+        <div className="flex items-center gap-2">
+          {phase === "ready-partial" && (
+            <Badge variant="secondary">Partial</Badge>
+          )}
+          {audioSampleRate && (
+            <span className="text-xs tabular-nums text-muted-foreground">
+              {(audioSampleRate / 1000).toFixed(1)} kHz WAV
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Waveform from the real PCM. Click to seek; the slider below is the
+          accessible seek control. */}
+      {peaks.length > 0 && (
+        <div
+          ref={waveRef}
+          onClick={onWaveClick}
+          aria-hidden="true"
+          title="Click to seek"
+          className="flex h-16 cursor-pointer items-center gap-[2px] sm:h-20"
+        >
+          {peaks.map((p, i) => {
+            const played = (i + 0.5) / peaks.length <= playedFrac;
+            return (
+              <span
+                key={i}
+                style={{ height: `${Math.round(p * 100)}%` }}
+                className={
+                  played
+                    ? "w-full min-w-0 flex-1 rounded-full bg-primary"
+                    : "w-full min-w-0 flex-1 rounded-full bg-primary/20"
+                }
+              />
+            );
+          })}
+        </div>
+      )}
+
+      <div className="mt-2 flex items-center gap-3">
+        <Button
+          size="icon"
+          onClick={toggle}
+          aria-label={playing ? "Pause" : "Play"}
+          className="h-10 w-10 shrink-0 rounded-full"
+        >
+          {playing ? (
+            <Pause className="h-4 w-4" />
+          ) : (
+            <Play className="ml-0.5 h-4 w-4" />
+          )}
         </Button>
-        <span className="w-12 text-right text-xs tabular-nums text-muted-foreground">
+        <span className="w-11 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
           {fmt(current)}
         </span>
         <Slider
@@ -130,11 +217,12 @@ export function AudioPlayer() {
           className="flex-1"
           aria-label="Seek"
         />
-        <span className="w-12 text-xs tabular-nums text-muted-foreground">
+        <span className="w-11 shrink-0 text-xs tabular-nums text-muted-foreground">
           {fmt(duration)}
         </span>
       </div>
-      <div className="mt-3 flex flex-wrap items-center gap-3">
+
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-3 border-t pt-3">
         <div className="flex items-center gap-2">
           <Button
             variant="ghost"
@@ -146,6 +234,7 @@ export function AudioPlayer() {
               if (el) el.muted = next;
             }}
             aria-label={muted ? "Unmute" : "Mute"}
+            className="h-8 w-8"
           >
             {muted || volume === 0 ? (
               <VolumeX className="h-4 w-4" />
@@ -196,13 +285,8 @@ export function AudioPlayer() {
           </Select>
         </div>
         <div className="ml-auto flex items-center gap-2">
-          {audioSampleRate && (
-            <span className="text-xs text-muted-foreground">
-              {(audioSampleRate / 1000).toFixed(1)} kHz WAV
-            </span>
-          )}
           <Button variant="outline" size="sm" onClick={downloadWav}>
-            <Download className="mr-1 h-3.5 w-3.5" /> WAV
+            <Download className="mr-1.5 h-3.5 w-3.5" /> WAV
           </Button>
           <Button
             variant="outline"
@@ -211,15 +295,19 @@ export function AudioPlayer() {
             disabled={mp3Busy}
           >
             {mp3Busy ? (
-              <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
             ) : (
-              <Download className="mr-1 h-3.5 w-3.5" />
+              <Download className="mr-1.5 h-3.5 w-3.5" />
             )}
             MP3
           </Button>
         </div>
       </div>
-      {mp3Error && <p className="mt-2 text-sm text-destructive">{mp3Error}</p>}
-    </div>
+      {mp3Error && (
+        <p role="alert" className="mt-2 text-sm text-destructive">
+          {mp3Error}
+        </p>
+      )}
+    </section>
   );
 }
