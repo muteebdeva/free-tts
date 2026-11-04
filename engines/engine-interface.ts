@@ -64,6 +64,8 @@ export interface TTSEngine {
   readonly id: string;
   /** Display name, e.g. "Kokoro 82M". */
   readonly label: string;
+  /** Active compute device after load() — "webgpu" or "wasm". */
+  readonly activeDevice: "webgpu" | "wasm";
   /** What this engine can and cannot do — read before rendering controls. */
   readonly capabilities: EngineCapabilities;
 

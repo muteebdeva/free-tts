@@ -44,6 +44,8 @@ function toVoice(v: SpeechSynthesisVoice, index: number): Voice {
 export class SystemEngine implements TTSEngine {
   readonly id = "system";
   readonly label = "System voices";
+  /** The OS speech engine runs wherever the OS runs it — not a compute device we choose. */
+  readonly activeDevice = "wasm" as const;
 
   readonly capabilities: EngineCapabilities = {
     // Device-dependent: populated honestly as "varies by device" in the UI.

@@ -1,5 +1,6 @@
 /**
- * TTS Web Worker: runs the Kokoro engine off the main thread.
+ * TTS Web Worker: runs neural TTS engines (Kokoro, KittenTTS Nano) off the
+ * main thread. ("system" voices stay main-thread — Web Speech API.)
  *
  * Responsibilities:
  *  - load the model once (progress reported to the UI),
@@ -19,9 +20,26 @@
  * stay on the main thread (playback is <audio>-only; no AudioContext).
  */
 import { KokoroEngine } from "../engines/kokoro/kokoro-engine";
+import { KittenEngine } from "../engines/kitten/kitten-engine";
+import type { TTSEngine } from "../engines/engine-interface";
 import { concatChunks } from "../audio/concat";
 import { chunkText } from "../lib/text-chunk";
 import { env as kokoroEnv } from "kokoro-js";
+import { env as ortEnv } from "onnxruntime-web";
+
+/** Neural engines that run inside this worker. ("system" stays main-thread.) */
+export type WorkerEngineId = "kokoro" | "kitten";
+
+/** Lazily-created engine registry — one instance per engine per worker lifetime. */
+const engines = new Map<WorkerEngineId, TTSEngine>();
+function getEngine(id: WorkerEngineId): TTSEngine {
+  let e = engines.get(id);
+  if (!e) {
+    e = id === "kitten" ? new KittenEngine() : new KokoroEngine();
+    engines.set(id, e);
+  }
+  return e;
+}
 
 interface OrtPolicy {
   /** ORT WASM thread count (positive int) — applied before session creation. */
@@ -31,9 +49,9 @@ interface OrtPolicy {
 }
 
 type InMessage =
-  | { type: "load"; requestId: number; assetBase?: string; ort?: OrtPolicy }
-  | { type: "voices"; requestId: number }
-  | { type: "synthesize"; requestId: number; text: string; voiceId: string; speed: number }
+  | { type: "load"; requestId: number; assetBase?: string; ort?: OrtPolicy; engineId?: WorkerEngineId }
+  | { type: "voices"; requestId: number; engineId?: WorkerEngineId }
+  | { type: "synthesize"; requestId: number; text: string; voiceId: string; speed: number; engineId?: WorkerEngineId }
   | {
       type: "synthesize-stream";
       requestId: number;
@@ -42,13 +60,17 @@ type InMessage =
       speed: number;
       chunkChars?: number;
       highWater?: number;
+      engineId?: WorkerEngineId;
     }
   | { type: "chunk-ack"; requestId: number }
   | { type: "cancel"; requestId: number }
-  | { type: "unload"; requestId: number }
-  | { type: "device"; requestId: number };
+  | { type: "unload"; requestId: number; engineId?: WorkerEngineId }
+  | { type: "device"; requestId: number; engineId?: WorkerEngineId };
 
-const engine = new KokoroEngine();
+function engineIdOf(msg: { engineId?: WorkerEngineId }): WorkerEngineId {
+  // Default keeps the verify harness (which sends no engineId) on Kokoro.
+  return msg.engineId === "kitten" ? "kitten" : "kokoro";
+}
 let currentAbort: AbortController | null = null;
 let currentRequestId: number | null = null;
 let fetchWrapped = false;
@@ -123,6 +145,12 @@ function applyOrtPolicy(ort: OrtPolicy | undefined, assetBase: string | undefine
   if (wasm && Number.isInteger(ort.numThreads) && (ort.numThreads as number) > 0) {
     wasm.numThreads = ort.numThreads;
   }
+  // KittenTTS uses onnxruntime-web directly (not kokoro-js's vendored copy),
+  // so its env needs the same policy applied to its own instance.
+  const kittenWasm = (ortEnv as unknown as { wasm?: { numThreads?: unknown; wasmPaths?: unknown } }).wasm;
+  if (kittenWasm && Number.isInteger(ort.numThreads) && (ort.numThreads as number) > 0) {
+    kittenWasm.numThreads = ort.numThreads;
+  }
   // Verify harness: the sandbox blocks CDN fetches, so the mirror's
   // wasmPaths (set by useAssetMirror) always wins there.
   if (ort.sameOriginWasm && !assetBase) {
@@ -130,6 +158,7 @@ function applyOrtPolicy(ort: OrtPolicy | undefined, assetBase: string | undefine
     // version-skew 404 (BOTTLENECKS.md #7). The runtime requests the
     // jsep-named files, which are shipped there; see spike note above.
     kokoroEnv.wasmPaths = "/ort/";
+    if (kittenWasm) kittenWasm.wasmPaths = "/ort/";
   }
 }
 
@@ -161,21 +190,22 @@ self.onmessage = async (event: MessageEvent<InMessage>) => {
   try {
     switch (msg.type) {
       case "device": {
-        post({ type: "device", requestId: msg.requestId, device: engine.activeDevice });
+        post({ type: "device", requestId: msg.requestId, device: getEngine(engineIdOf(msg)).activeDevice });
         break;
       }
       case "load": {
         if (msg.assetBase) useAssetMirror(msg.assetBase);
         applyOrtPolicy(msg.ort, msg.assetBase);
-        await engine.load((fraction) =>
+        const loadEngine = getEngine(engineIdOf(msg));
+        await loadEngine.load((fraction) =>
           post({ type: "load-progress", requestId: msg.requestId, fraction }),
         );
-        post({ type: "loaded", requestId: msg.requestId, device: engine.activeDevice });
+        post({ type: "loaded", requestId: msg.requestId, device: loadEngine.activeDevice });
         break;
       }
       case "voices": {
         // The voice registry is static metadata — no model download needed.
-        post({ type: "voices", requestId: msg.requestId, voices: await engine.getVoices() });
+        post({ type: "voices", requestId: msg.requestId, voices: await getEngine(engineIdOf(msg)).getVoices() });
         break;
       }
       case "synthesize": {
@@ -193,7 +223,7 @@ self.onmessage = async (event: MessageEvent<InMessage>) => {
 
         for (let i = 0; i < chunks.length; i++) {
           if (aborter.signal.aborted) throw new DOMException("Aborted", "AbortError");
-          const result = await engine.synthesize(chunks[i], msg.voiceId, {
+          const result = await getEngine(engineIdOf(msg)).synthesize(chunks[i], msg.voiceId, {
             speed: msg.speed,
             signal: aborter.signal,
           });
@@ -240,7 +270,7 @@ self.onmessage = async (event: MessageEvent<InMessage>) => {
           // enough chunks to drop below the high-water mark.
           await waitForAckSlot(aborter);
           if (aborter.signal.aborted) throw new DOMException("Aborted", "AbortError");
-          const result = await engine.synthesize(chunks[i], msg.voiceId, {
+          const result = await getEngine(engineIdOf(msg)).synthesize(chunks[i], msg.voiceId, {
             speed: msg.speed,
             signal: aborter.signal,
           });
@@ -283,7 +313,7 @@ self.onmessage = async (event: MessageEvent<InMessage>) => {
       case "unload": {
         currentAbort?.abort();
         drainStreamWaiters();
-        await engine.unload();
+        await getEngine(engineIdOf(msg)).unload();
         post({ type: "unloaded", requestId: msg.requestId });
         break;
       }

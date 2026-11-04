@@ -25,6 +25,9 @@
  */
 import type { Voice } from "../engines/engine-interface";
 
+/** Neural engines that run inside the worker. ("system" voices stay main-thread.) */
+export type WorkerEngineId = "kokoro" | "kitten";
+
 /** Minimal worker surface — injectable for tests. */
 export interface WorkerLike {
   postMessage(message: unknown, transfer?: Transferable[]): void;
@@ -60,6 +63,7 @@ export interface StreamResult {
 }
 
 export interface StreamOptions {
+  engineId?: WorkerEngineId;
   chunkChars?: number;
   highWater?: number;
   /**
@@ -183,18 +187,19 @@ export class EngineManager {
   }
 
   /** "webgpu" | "wasm" — which path the engine selected on this device. */
-  async getDevice(): Promise<string> {
-    const res = await this.call("device", {});
+  async getDevice(engineId: WorkerEngineId = "kokoro"): Promise<string> {
+    const res = await this.call("device", { engineId });
     return (res as { device: string }).device;
   }
 
   async loadModel(
     onProgress?: (fraction: number) => void,
-    opts: LoadModelOptions = {},
+    opts: LoadModelOptions & { engineId?: WorkerEngineId } = {},
   ): Promise<string> {
     const res = await this.call(
       "load",
       {
+        engineId: opts.engineId ?? "kokoro",
         assetBase: opts.assetBase,
         ort: { numThreads: opts.numThreads, sameOriginWasm: opts.sameOriginWasm },
       },
@@ -204,8 +209,8 @@ export class EngineManager {
     return (res as { device: string }).device;
   }
 
-  async getVoices(): Promise<Voice[]> {
-    const res = await this.call("voices", {});
+  async getVoices(engineId: WorkerEngineId = "kokoro"): Promise<Voice[]> {
+    const res = await this.call("voices", { engineId });
     return (res as { voices: Voice[] }).voices;
   }
 
@@ -214,13 +219,14 @@ export class EngineManager {
     voiceId: string,
     speed: number,
     events: SynthesisEvents = {},
+    engineId: WorkerEngineId = "kokoro",
   ): Promise<SynthResult> {
     // Cancel any in-flight synthesis before starting a new one.
     this.cancel();
     const estChunks = Math.max(1, Math.ceil(text.length / 400));
     const res = await this.call(
       "synthesize",
-      { text, voiceId, speed },
+      { text, voiceId, speed, engineId },
       { onProgress: events.onProgress },
       { timeoutMs: Math.max(DEFAULT_REQUEST_TIMEOUT_MS, estChunks * DEFAULT_CHUNK_STALL_MS + 60_000) },
     );
@@ -272,6 +278,7 @@ export class EngineManager {
         text,
         voiceId,
         speed,
+        engineId: opts.engineId ?? "kokoro",
         chunkChars: opts.chunkChars,
         highWater,
       });

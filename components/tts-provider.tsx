@@ -93,6 +93,10 @@ interface TTSContextValue {
   // Kokoro engine state
   kokoroLoaded: boolean;
   kokoroLoading: boolean;
+  // KittenTTS Nano engine state (light neural opt-up for mobile)
+  kittenLoaded: boolean;
+  kittenLoading: boolean;
+  kittenVoices: Voice[];
   /** 0..1, or null when no real progress event has arrived yet ("Preparing…"). */
   loadProgress: number | null;
   device: string | null; // "webgpu" | "wasm"
@@ -139,12 +143,15 @@ export function TTSProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<DeviceProfile | null>(null);
   const [kokoroLoaded, setKokoroLoaded] = useState(false);
   const [kokoroLoading, setKokoroLoading] = useState(false);
+  const [kittenLoaded, setKittenLoaded] = useState(false);
+  const [kittenLoading, setKittenLoading] = useState(false);
   const [loadProgress, setLoadProgress] = useState<number | null>(null);
   const [device, setDevice] = useState<string | null>(null);
   const [voices, setVoices] = useState<Voice[]>([]);
   const [voicesLoading, setVoicesLoading] = useState(false);
   const [systemVoices, setSystemVoices] = useState<Voice[]>([]);
   const [systemAvailable, setSystemAvailable] = useState(false);
+  const [kittenVoices, setKittenVoices] = useState<Voice[]>([]);
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [synthProgress, setSynthProgress] = useState<{ done: number; total: number } | null>(null);
@@ -162,8 +169,11 @@ export function TTSProvider({ children }: { children: ReactNode }) {
   const phaseRef = useRef<Phase>("idle");
   phaseRef.current = phase;
   const kokoroLoadedRef = useRef(false);
+  const kittenLoadedRef = useRef(false);
   const voicesRef = useRef<Voice[]>([]);
   voicesRef.current = voices;
+  const kittenVoicesRef = useRef<Voice[]>([]);
+  kittenVoicesRef.current = kittenVoices;
   const profileRef = useRef<DeviceProfile | null>(null);
   const engineTouchedRef = useRef(false);
   const streamRef = useRef<StreamState | null>(null);
@@ -172,6 +182,7 @@ export function TTSProvider({ children }: { children: ReactNode }) {
     setError(message);
     setPhase("error");
     setKokoroLoading(false);
+    setKittenLoading(false);
     setSynthProgress(null);
   }, []);
 
@@ -189,6 +200,20 @@ export function TTSProvider({ children }: { children: ReactNode }) {
       // Static registry — no model download.
       const mgr = getEngineManager();
       setVoices(await mgr.getVoices());
+    } catch (e) {
+      fail(e instanceof Error ? e.message : String(e));
+    } finally {
+      setVoicesLoading(false);
+    }
+  }, [voicesLoading, fail]);
+
+  const ensureKittenVoices = useCallback(async () => {
+    if (kittenVoicesRef.current.length > 0 || voicesLoading) return;
+    setVoicesLoading(true);
+    try {
+      // Static registry — no model download.
+      const mgr = getEngineManager();
+      setKittenVoices(await mgr.getVoices("kitten"));
     } catch (e) {
       fail(e instanceof Error ? e.message : String(e));
     } finally {
@@ -235,9 +260,10 @@ export function TTSProvider({ children }: { children: ReactNode }) {
       setError(null);
       setSynthProgress(null);
       if (e === "kokoro") void ensureKokoroVoices();
+      if (e === "kitten") void ensureKittenVoices();
       if (e === "system") void ensureSystemVoices();
     },
-    [ensureKokoroVoices, ensureSystemVoices],
+    [ensureKokoroVoices, ensureKittenVoices, ensureSystemVoices],
   );
 
   // Classify once on mount; the ladder sets the DEFAULT engine only — a
@@ -250,12 +276,7 @@ export function TTSProvider({ children }: { children: ReactNode }) {
       setProfile(p);
       if (!engineTouchedRef.current) {
         const ladderDefault = defaultEngineFor(p);
-        // TEMPORARY (Track B): the ladder can now return "kitten"
-        // (balanced-mobile), but engines/kitten is not wired into this
-        // provider yet — coercing to kokoro (today's behavior on those
-        // devices) instead of defaulting to a dead engine. Track A: remove
-        // this coercion when the kitten engine lands.
-        applyEngineChoice(ladderDefault === "kitten" ? "kokoro" : ladderDefault, false);
+        applyEngineChoice(ladderDefault, false);
       }
     });
     return () => {
@@ -425,6 +446,137 @@ export function TTSProvider({ children }: { children: ReactNode }) {
 
   // ---- generation ----------------------------------------------------------
 
+  // ---- neural engines (kokoro | kitten): shared streaming generation --------
+
+  const generateNeural = useCallback(
+    async (
+      engineId: "kokoro" | "kitten",
+      text: string,
+      voiceId: string,
+      speed: number,
+    ) => {
+      // Per-engine state slots — one neural engine is active at a time.
+      const slot =
+        engineId === "kokoro"
+          ? {
+              loadedRef: kokoroLoadedRef,
+              setLoaded: setKokoroLoaded,
+              setLoading: setKokoroLoading,
+              voicesRef,
+              setVoices,
+            }
+          : {
+              loadedRef: kittenLoadedRef,
+              setLoaded: setKittenLoaded,
+              setLoading: setKittenLoading,
+              voicesRef: kittenVoicesRef,
+              setVoices: setKittenVoices,
+            };
+      // Neural-engine path (worker, streaming). Shared by Kokoro and KittenTTS Nano.
+      const mgr = getEngineManager();
+      const profile =
+        profileRef.current ?? (await classifyDevice().catch(() => null));
+      if (profile) {
+        profileRef.current = profile;
+        setProfile(profile);
+      }
+      const p = profileRef.current;
+      const chunkChars = p?.chunkChars ?? 400;
+      const highWater = p?.streamHighWater ?? 3;
+      // Throttle load-progress state: ~250ms / >=1% — ends the render storm
+      // during the model download. Real percentages only; loadProgress stays
+      // null ("Preparing…") until the first real event — no fake seed.
+      const throttledLoad = createThrottledProgress((f) => setLoadProgress(f));
+
+      try {
+        if (!slot.loadedRef.current) {
+          setPhase("loading-model");
+          slot.setLoading(true);
+          setLoadProgress(null);
+          const dev = await mgr.loadModel(throttledLoad, {
+            engineId,
+            numThreads:
+              p && p.ortThreads > 0 ? p.ortThreads : undefined,
+            sameOriginWasm: p?.ortWasmBase === "same-origin",
+          });
+          setDevice(dev);
+          slot.setLoaded(true);
+          slot.loadedRef.current = true;
+          slot.setLoading(false);
+          if (slot.voicesRef.current.length === 0)
+            slot.setVoices(await mgr.getVoices(engineId));
+        }
+        // No fake {done: 0, total: 1} seed — real synth-progress fills it.
+        setPhase("synthesizing");
+        setSynthProgress(null);
+
+        const s: StreamState = {
+          stream: null as unknown as StreamPromise,
+          queue: new StreamQueue<QueuedChunk>(highWater),
+          pcmParts: [],
+          sampleRate: 24000,
+          els: [new Audio(), new Audio()],
+          activeEl: 0,
+          playing: false,
+          synthDone: false,
+          currentChunk: null,
+          userStopped: false,
+        };
+        const stream = mgr.synthesizeStream(
+          text,
+          voiceId,
+          speed,
+          {
+            onChunk: (chunk) => handleStreamChunk(s, chunk),
+            onProgress: (done, total) => setSynthProgress({ done, total }),
+          },
+          { engineId, chunkChars, highWater },
+        );
+        s.stream = stream;
+        streamRef.current = s;
+
+        const result = await stream;
+        // All chunks received. The queue drains naturally (phase stays
+        // "streaming" with "Playing… finishing up"); the combined WAV is
+        // built now so replay/download are ready the moment it drains.
+        s.synthDone = true;
+        s.sampleRate = result.sampleRate;
+        buildStreamAudioUrl(s);
+        pumpStream();
+      } catch (e) {
+        const s = streamRef.current;
+        if (e instanceof DOMException && e.name === "AbortError") {
+          if (s?.userStopped) {
+            // Stop during streaming: keep the partial audio.
+            finishStreamPartial(s);
+          } else {
+            teardownStream();
+            setPhase("idle");
+            slot.setLoading(false);
+            setSynthProgress(null);
+          }
+        } else {
+          teardownStream();
+          fail(
+            e instanceof Error
+              ? `Speech generation failed: ${e.message}`
+              : "Speech generation failed.",
+          );
+        }
+        clearGenerateFlag();
+      }
+    },
+    [
+      fail,
+      dismissError,
+      teardownStream,
+      handleStreamChunk,
+      pumpStream,
+      buildStreamAudioUrl,
+      finishStreamPartial,
+    ],
+  );
+
   const generate = useCallback(
     async (text: string, voiceId: string, speed: number) => {
       const validation = validateTextInput(text, MAX_CHARS);
@@ -452,118 +604,18 @@ export function TTSProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      if (engineChoiceRef.current === "kitten") {
-        // engines/kitten is not wired into this provider yet (Track A owns
-        // it). Fail honestly instead of silently running the wrong engine.
-        // (Unreachable via the UI today — no kitten tab exists yet.)
-        fail(
-          "KittenTTS Nano isn't connected in this build yet — " +
-            "Kokoro or system voices work now.",
-        );
-        clearGenerateFlag();
-        return;
-      }
-
-      // Kokoro path (worker, streaming).
-      const mgr = getEngineManager();
-      const profile =
-        profileRef.current ?? (await classifyDevice().catch(() => null));
-      if (profile) {
-        profileRef.current = profile;
-        setProfile(profile);
-      }
-      const p = profileRef.current;
-      const chunkChars = p?.chunkChars ?? 400;
-      const highWater = p?.streamHighWater ?? 3;
-      // Throttle load-progress state: ~250ms / >=1% — ends the render storm
-      // during the model download. Real percentages only; loadProgress stays
-      // null ("Preparing…") until the first real event — no fake seed.
-      const throttledLoad = createThrottledProgress((f) => setLoadProgress(f));
-
-      try {
-        if (!kokoroLoadedRef.current) {
-          setPhase("loading-model");
-          setKokoroLoading(true);
-          setLoadProgress(null);
-          const dev = await mgr.loadModel(throttledLoad, {
-            numThreads:
-              p && p.ortThreads > 0 ? p.ortThreads : undefined,
-            sameOriginWasm: p?.ortWasmBase === "same-origin",
-          });
-          setDevice(dev);
-          setKokoroLoaded(true);
-          kokoroLoadedRef.current = true;
-          setKokoroLoading(false);
-          if (voicesRef.current.length === 0) setVoices(await mgr.getVoices());
-        }
-        // No fake {done: 0, total: 1} seed — real synth-progress fills it.
-        setPhase("synthesizing");
-        setSynthProgress(null);
-
-        const s: StreamState = {
-          stream: null as unknown as StreamPromise,
-          queue: new StreamQueue<QueuedChunk>(highWater),
-          pcmParts: [],
-          sampleRate: 24000,
-          els: [new Audio(), new Audio()],
-          activeEl: 0,
-          playing: false,
-          synthDone: false,
-          currentChunk: null,
-          userStopped: false,
-        };
-        const stream = mgr.synthesizeStream(
-          text,
-          voiceId,
-          speed,
-          {
-            onChunk: (chunk) => handleStreamChunk(s, chunk),
-            onProgress: (done, total) => setSynthProgress({ done, total }),
-          },
-          { chunkChars, highWater },
-        );
-        s.stream = stream;
-        streamRef.current = s;
-
-        const result = await stream;
-        // All chunks received. The queue drains naturally (phase stays
-        // "streaming" with "Playing… finishing up"); the combined WAV is
-        // built now so replay/download are ready the moment it drains.
-        s.synthDone = true;
-        s.sampleRate = result.sampleRate;
-        buildStreamAudioUrl(s);
-        pumpStream();
-      } catch (e) {
-        const s = streamRef.current;
-        if (e instanceof DOMException && e.name === "AbortError") {
-          if (s?.userStopped) {
-            // Stop during streaming: keep the partial audio.
-            finishStreamPartial(s);
-          } else {
-            teardownStream();
-            setPhase("idle");
-            setKokoroLoading(false);
-            setSynthProgress(null);
-          }
-        } else {
-          teardownStream();
-          fail(
-            e instanceof Error
-              ? `Speech generation failed: ${e.message}`
-              : "Speech generation failed.",
-          );
-        }
-        clearGenerateFlag();
-      }
+            // Neural engines (kokoro | kitten) via the worker, streaming.
+      return generateNeural(
+        engineChoiceRef.current === "kitten" ? "kitten" : "kokoro",
+        text,
+        voiceId,
+        speed,
+      );
     },
     [
       fail,
       dismissError,
-      teardownStream,
-      handleStreamChunk,
-      pumpStream,
-      buildStreamAudioUrl,
-      finishStreamPartial,
+      generateNeural,
     ],
   );
 
@@ -587,6 +639,7 @@ export function TTSProvider({ children }: { children: ReactNode }) {
     setPhase("idle");
     setSynthProgress(null);
     setKokoroLoading(false);
+    setKittenLoading(false);
   }, [teardownStream]);
 
   const getAudioData = useCallback(() => {
@@ -616,6 +669,8 @@ export function TTSProvider({ children }: { children: ReactNode }) {
     setAudioSampleRate(null);
     setKokoroLoaded(false);
     kokoroLoadedRef.current = false;
+    setKittenLoaded(false);
+    kittenLoadedRef.current = false;
     setDevice(null);
     setLoadProgress(null);
     setPhase("idle");
@@ -649,19 +704,26 @@ export function TTSProvider({ children }: { children: ReactNode }) {
             {},
           );
         } else {
+          // Neural engines (kokoro | kitten) via the worker.
+          const nid = engine === "kitten" ? "kitten" : "kokoro";
+          const slot =
+            nid === "kokoro"
+              ? { loadedRef: kokoroLoadedRef, setLoaded: setKokoroLoaded }
+              : { loadedRef: kittenLoadedRef, setLoaded: setKittenLoaded };
           const mgr = getEngineManager();
           const p = profileRef.current;
           const throttledLoad = createThrottledProgress((f) => setLoadProgress(f));
-          if (!kokoroLoadedRef.current) {
+          if (!slot.loadedRef.current) {
             const dev = await mgr.loadModel(throttledLoad, {
+              engineId: nid,
               numThreads: p && p.ortThreads > 0 ? p.ortThreads : undefined,
               sameOriginWasm: p?.ortWasmBase === "same-origin",
             });
             setDevice(dev);
-            setKokoroLoaded(true);
-            kokoroLoadedRef.current = true;
+            slot.setLoaded(true);
+            slot.loadedRef.current = true;
           }
-          const result = await mgr.synthesize(PREVIEW_TEXT(voice.name), voice.id, 1);
+          const result = await mgr.synthesize(PREVIEW_TEXT(voice.name), voice.id, 1, {}, nid);
           const wav = encodeWav(result.samples, { sampleRate: result.sampleRate });
           const url = URL.createObjectURL(
             new Blob([wav as unknown as BlobPart], { type: "audio/wav" }),
@@ -688,6 +750,9 @@ export function TTSProvider({ children }: { children: ReactNode }) {
       profile,
       kokoroLoaded,
       kokoroLoading,
+      kittenLoaded,
+      kittenLoading,
+      kittenVoices,
       loadProgress,
       device,
       voices,
@@ -711,6 +776,7 @@ export function TTSProvider({ children }: { children: ReactNode }) {
     }),
     [
       engineChoice, setEngineChoice, profile, kokoroLoaded, kokoroLoading,
+      kittenLoaded, kittenLoading, kittenVoices,
       loadProgress, device, voices, voicesLoading, systemAvailable,
       systemVoices, phase, synthProgress, audioUrl, audioSampleRate, error,
       generate, cancel, previewVoice, previewingId, dismissError,
