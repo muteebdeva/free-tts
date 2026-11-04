@@ -1,13 +1,46 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  PROFILES,
   classifyDevice,
+  classifySignals,
   defaultEngineFor,
   getProfile,
-  PROFILES,
+  isIOSDevice,
+  isMobileDevice,
+  type DeviceProfile,
+  type DeviceSignals,
 } from "../lib/device-profile";
 
+const DESKTOP_UA =
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
+const ANDROID_UA =
+  "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Mobile Safari/537.36";
+const IPHONE_UA =
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
+const IPHONE_IOS26_UA =
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1";
+const IPAD_MASKED_UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15";
+
+function signals(over: Partial<DeviceSignals> = {}): DeviceSignals {
+  return {
+    userAgent: DESKTOP_UA,
+    maxTouchPoints: 0,
+    hardwareConcurrency: 8,
+    deviceMemory: 8,
+    hasWebGpuApi: false,
+    webGpuAdapter: null,
+    ...over,
+  };
+}
+
 function mockNavigator(overrides: Record<string, unknown>) {
-  const nav = { userAgent: "", maxTouchPoints: 0, hardwareConcurrency: 8, ...overrides };
+  const nav = {
+    userAgent: "",
+    maxTouchPoints: 0,
+    hardwareConcurrency: 8,
+    ...overrides,
+  };
   vi.stubGlobal("navigator", nav);
   return nav;
 }
@@ -34,65 +67,166 @@ describe("profile table (design doc §c)", () => {
     expect(PROFILES.compatibility.ortWasmBase).toBe("same-origin");
   });
 
-  it("getProfile returns the table entry", () => {
-    expect(getProfile("balanced")).toBe(PROFILES.balanced);
+  it("kokoro device/dtype policy per profile", () => {
+    expect(PROFILES.performance.kokoroPolicy).toEqual({ device: "webgpu", dtype: "fp32" });
+    expect(PROFILES.balanced.kokoroPolicy).toEqual({ device: "wasm", dtype: "q8" });
+    expect(PROFILES.compatibility.kokoroPolicy).toEqual({ device: "wasm", dtype: "q8" });
+  });
+
+  it("getProfile returns an equal copy", () => {
+    expect(getProfile("balanced")).toEqual(PROFILES.balanced);
+    const a = getProfile("balanced");
+    a.chunkChars = 1;
+    expect(getProfile("balanced").chunkChars).toBe(300);
+  });
+});
+
+describe("isIOSDevice (pure)", () => {
+  it("detects iPhone / iPad / iPod tokens", () => {
+    expect(isIOSDevice(IPHONE_UA)).toBe(true);
+    expect(isIOSDevice("Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X)")).toBe(true);
+    expect(isIOSDevice("Mozilla/5.0 (iPod touch; CPU iPhone OS 16_0 like Mac OS X)")).toBe(true);
+  });
+  it("detects iPadOS 13+ masquerading as Mac via touch points", () => {
+    expect(isIOSDevice(IPAD_MASKED_UA, 5)).toBe(true);
+  });
+  it("does not flag a real Mac without touch", () => {
+    expect(isIOSDevice(IPAD_MASKED_UA, 0)).toBe(false);
+  });
+  it("does not flag desktop Linux / Android", () => {
+    expect(isIOSDevice(DESKTOP_UA)).toBe(false);
+    expect(isIOSDevice(ANDROID_UA)).toBe(false);
+  });
+});
+
+describe("isMobileDevice (pure)", () => {
+  it("flags Android and iPhone, not desktop", () => {
+    expect(isMobileDevice(ANDROID_UA)).toBe(true);
+    expect(isMobileDevice(IPHONE_UA)).toBe(true);
+    expect(isMobileDevice(DESKTOP_UA)).toBe(false);
+  });
+});
+
+describe("classifySignals (pure)", () => {
+  it("iOS (any version) → compatibility, even with a WebGPU adapter", () => {
+    // iOS 26 Safari exposes WebGPU, but the ORT WebGPU EP is broken there
+    // (microsoft/onnxruntime#26827) — never performance on iOS.
+    expect(
+      classifySignals(
+        signals({ userAgent: IPHONE_IOS26_UA, hasWebGpuApi: true, webGpuAdapter: {} }),
+      ),
+    ).toBe("compatibility");
+    expect(classifySignals(signals({ userAgent: IPHONE_UA }))).toBe("compatibility");
+    expect(
+      classifySignals(signals({ userAgent: IPAD_MASKED_UA, maxTouchPoints: 5 })),
+    ).toBe("compatibility");
+  });
+  it("desktop + working adapter → performance", () => {
+    expect(
+      classifySignals(signals({ webGpuAdapter: {}, hasWebGpuApi: true })),
+    ).toBe("performance");
+  });
+  it("desktop, no adapter → balanced", () => {
+    expect(classifySignals(signals())).toBe("balanced");
+  });
+  it("explicit low deviceMemory (≤2 GB) → compatibility", () => {
+    expect(classifySignals(signals({ deviceMemory: 2 }))).toBe("compatibility");
+    expect(classifySignals(signals({ deviceMemory: 1 }))).toBe("compatibility");
+  });
+  it("unknown deviceMemory stays balanced (absence is not low)", () => {
+    expect(classifySignals(signals({ deviceMemory: undefined }))).toBe("balanced");
+  });
+  it("capable Android (adapter) → balanced", () => {
+    expect(
+      classifySignals(
+        signals({
+          userAgent: ANDROID_UA,
+          webGpuAdapter: {},
+          hasWebGpuApi: true,
+          deviceMemory: 8,
+        }),
+      ),
+    ).toBe("balanced");
+  });
+  it("Android without adapter and unknown memory → balanced (capable Android)", () => {
+    expect(
+      classifySignals(signals({ userAgent: ANDROID_UA, deviceMemory: undefined })),
+    ).toBe("balanced");
+  });
+  it("Android without adapter but explicitly low memory → compatibility", () => {
+    expect(
+      classifySignals(signals({ userAgent: ANDROID_UA, deviceMemory: 2 })),
+    ).toBe("compatibility");
   });
 });
 
 describe("defaultEngineFor", () => {
-  it("kokoro on performance/balanced, system on compatibility", () => {
-    expect(defaultEngineFor(PROFILES.performance)).toBe("kokoro");
-    expect(defaultEngineFor(PROFILES.balanced)).toBe("kokoro");
-    expect(defaultEngineFor(PROFILES.compatibility)).toBe("system");
+  const profile = (name: DeviceProfile["name"], isMobile: boolean): DeviceProfile => ({
+    ...getProfile(name),
+    isMobile,
+  });
+  it("performance → kokoro", () => {
+    expect(defaultEngineFor(profile("performance", false))).toBe("kokoro");
+  });
+  it("balanced desktop → kokoro", () => {
+    expect(defaultEngineFor(profile("balanced", false))).toBe("kokoro");
+  });
+  it("balanced mobile (capable Android) → kitten", () => {
+    // The gated mobile opt-up, graduated after the real-audio gate passed
+    // (docs/KITTEN-SPIKE.md).
+    expect(defaultEngineFor(profile("balanced", true))).toBe("kitten");
+  });
+  it("compatibility → system (iOS / low-memory)", () => {
+    expect(defaultEngineFor(profile("compatibility", false))).toBe("system");
+    expect(defaultEngineFor(profile("compatibility", true))).toBe("system");
   });
 });
 
-describe("classifyDevice", () => {
+describe("classifyDevice (async, mocked navigator)", () => {
   it("iPhone UA → compatibility", async () => {
-    mockNavigator({
-      userAgent:
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15",
-    });
-    expect(await classifyDevice()).toBe(PROFILES.compatibility);
+    mockNavigator({ userAgent: IPHONE_IOS26_UA });
+    expect((await classifyDevice()).name).toBe("compatibility");
   });
 
   it("iPadOS (Mac UA + touch) → compatibility", async () => {
-    mockNavigator({
-      userAgent:
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) AppleWebKit/605.1.15",
-      maxTouchPoints: 5,
-    });
-    expect(await classifyDevice()).toBe(PROFILES.compatibility);
+    mockNavigator({ userAgent: IPAD_MASKED_UA, maxTouchPoints: 5 });
+    expect((await classifyDevice()).name).toBe("compatibility");
   });
 
   it("desktop with a working WebGPU adapter → performance", async () => {
     mockNavigator({
-      userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+      userAgent: DESKTOP_UA,
       gpu: { requestAdapter: async () => ({}) },
     });
-    expect(await classifyDevice()).toBe(PROFILES.performance);
+    const p = await classifyDevice();
+    expect(p.name).toBe("performance");
+    expect(p.isMobile).toBe(false);
+    expect(p.defaultEngine).toBe("kokoro");
   });
 
   it("desktop without a usable adapter → balanced", async () => {
     mockNavigator({
-      userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+      userAgent: DESKTOP_UA,
       gpu: { requestAdapter: async () => null },
     });
-    expect(await classifyDevice()).toBe(PROFILES.balanced);
+    expect((await classifyDevice()).name).toBe("balanced");
   });
 
   it("explicit low deviceMemory (<=2 GB) → compatibility", async () => {
-    mockNavigator({
-      userAgent: "Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36",
-      deviceMemory: 2,
-    });
-    expect(await classifyDevice()).toBe(PROFILES.compatibility);
+    mockNavigator({ userAgent: ANDROID_UA, deviceMemory: 2 });
+    expect((await classifyDevice()).name).toBe("compatibility");
   });
 
-  it("unknown deviceMemory is not treated as capable (stays balanced)", async () => {
-    mockNavigator({
-      userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
-    });
-    expect(await classifyDevice()).toBe(PROFILES.balanced);
+  it("unknown deviceMemory is not treated as low (stays balanced)", async () => {
+    mockNavigator({ userAgent: DESKTOP_UA });
+    expect((await classifyDevice()).name).toBe("balanced");
+  });
+
+  it("capable Android without adapter → balanced with kitten default", async () => {
+    mockNavigator({ userAgent: ANDROID_UA });
+    const p = await classifyDevice();
+    expect(p.name).toBe("balanced");
+    expect(p.isMobile).toBe(true);
+    expect(p.defaultEngine).toBe("kitten");
   });
 });
