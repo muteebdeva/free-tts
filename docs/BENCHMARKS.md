@@ -71,6 +71,41 @@ Vary `--text` / `--voice` for other inputs. For a WebGPU measurement, run the
 same script on a machine with a GPU and Chromium WebGPU enabled; record the
 device string reported in the JSON (`"device": "webgpu"`).
 
+## Streaming (protocol v2) — measured 2026-11-04
+
+**Method:** `node scripts/verify-pages.mjs --stream` (real headless-Chromium
+run against the with-verify Pages artifact; evidence in
+`docs/evidence/freetts-verify-pages.json`). Profile: **compatibility**
+(200-char chunks, 1 ORT thread, same-origin-intent WASM policy), voice
+`af_heart`, 474-char / 5-sentence text → 3 chunks. Environment: same VM as
+above (no GPU, wasm EP).
+
+| Metric | Run 1 | Run 2 |
+|---|---|---|
+| Time to first chunk (time-to-first-audio) | **62.0 s** | **46.9 s** |
+| Full profile-chunked stream (3 chunks, 27.1 s audio) | **158.1 s** → RTF 5.83 (≈ 0.17×) | **110.3 s** → RTF 4.07 (≈ 0.25×) |
+| First-chunk / full-stream ratio | 0.39 | 0.43 |
+| Streamed PCM vs batch PCM (identical 400-char chunking) | **byte-identical** | **byte-identical** |
+| ORT binary fetched | `ort-wasm-simd-threaded.jsep.wasm` | same |
+| Non-JSEP `ort-wasm-simd-threaded.wasm` fetched | **no** | **no** |
+| Model load with 1-thread policy | 14.1 s | 12.3 s |
+
+(The vendored ORT 1.22.0 wasm backend always requests the jsep-named file,
+even on the pure-WASM path; the non-JSEP pair is shipped under `public/ort/`
+for forward-compat and the gate asserts it is *not* requested. Run-to-run
+variance is the shared VM's CPU contention.)
+
+**Honest reading:** on this CPU-only VM, streaming cuts perceived wait from
+"full ~110–158 s before any sound" to "~47–62 s to first audio" — the rest
+generates while the user is already listening. RTF is unchanged by streaming
+(same inference); the win is entirely time-to-first-audio plus bounded
+memory (no batch PCM accumulation). The 1-thread compatibility policy costs
+~12% throughput here (0.333 vs 0.297 s/char against the multi-thread
+baseline) — the intended trade on iOS, where WASM threads serialize in
+practice.
+
+iOS rows remain ESTIMATED until device testing exists (no iPhone runs).
+
 ## Not yet measured
 
 - Peak JS heap / WASM memory during inference (needs `performance.measureUserAgentSpecificMemory`
@@ -79,3 +114,5 @@ device string reported in the JSON (`"device": "webgpu"`).
 - MP3 encode time in-browser.
 - Battery impact on mobile (untested — no mobile runs).
 - First-load page weight (JS bundle size — see build output).
+- Inter-chunk playback gap duration with sequential `<audio>` (documented
+  as acceptable; not yet timed).

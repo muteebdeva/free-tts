@@ -1,5 +1,5 @@
 {
-  "date": "2026-11-04T07:01:01.299Z",
+  "date": "2026-11-04T08:16:34.228Z",
   "artifact": "cloudflare-pages static export (out/)",
   "text": "Hello. This is a verification test of the FreeTTS Pages build. Real artificial intelligence is speaking locally, inside your browser.",
   "voice": "af_heart",
@@ -12,11 +12,31 @@
   "peak": 0.5405,
   "nonSilentFraction": 0.6259,
   "chunkCount": 1,
-  "loadMs": 17422,
-  "synthMs": 81898,
-  "realtimeFactor": 8.855,
+  "loadMs": 11003,
+  "synthMs": 38629,
+  "realtimeFactor": 4.177,
   "wavBytes": 444002,
   "checks": [
+    {
+      "name": "public/ort ships ort-wasm-simd-threaded.jsep.wasm",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "public/ort ships ort-wasm-simd-threaded.jsep.mjs",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "public/ort ships ort-wasm-simd-threaded.wasm",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "public/ort ships ort-wasm-simd-threaded.mjs",
+      "pass": true,
+      "detail": ""
+    },
     {
       "name": "page reported ok",
       "pass": true,
@@ -53,7 +73,7 @@
       "detail": "443958 vs 443958"
     },
     {
-      "name": "duration plausible for text (1.5s–20s)",
+      "name": "duration plausible for text",
       "pass": true,
       "detail": "9.25s"
     },

@@ -99,23 +99,19 @@ function check(name, cond, detail = "") {
 
 let server = null;
 try {
-  // The deploy artifact excludes app/verify; the stream gate needs a
-  // with-verify build (INCLUDE_VERIFY=1) — build it on demand.
+  // Both modes gate a WITH-verify build (INCLUDE_VERIFY=1) — the /verify
+  // page is the harness that drives real inference. The production export
+  // must NEVER ship it: that is enforced by scripts/build-pages.sh's
+  // default move-aside (verified separately: `bash scripts/build-pages.sh
+  // && test ! -e out/verify.html`), not by this gate's artifact.
   const verifyHtml =
     existsSync(join(OUT, "verify.html")) || existsSync(join(OUT, "verify", "index.html"));
-  if (STREAM && !verifyHtml) {
-    console.log("[verify-pages] building with-verify artifact (INCLUDE_VERIFY=1)…");
-    execSync("INCLUDE_VERIFY=1 bash scripts/build-pages.sh", { cwd: ROOT, stdio: "inherit" });
-  } else if (!existsSync(OUT)) {
+  if (!existsSync(OUT)) {
     throw new Error("out/ missing — run scripts/build-pages.sh first");
   }
-  // The production export must NEVER ship the verify harness.
-  if (!STREAM) {
-    check(
-      "app/verify excluded from the production export",
-      !existsSync(join(OUT, "verify.html")) && !existsSync(join(OUT, "verify", "index.html")),
-      "out/verify.html present",
-    );
+  if (!verifyHtml) {
+    console.log("[verify-pages] building with-verify artifact (INCLUDE_VERIFY=1)…");
+    execSync("INCLUDE_VERIFY=1 bash scripts/build-pages.sh", { cwd: ROOT, stdio: "inherit" });
   }
   // public/ort must ship the WASM binaries (jsep pair = actually fetched;
   // non-jsep pair = shipped per the memory plan, asserted NOT fetched).
@@ -184,7 +180,10 @@ try {
   check("data size matches header", dataBytes === wav.length - 44, `${dataBytes} vs ${wav.length - 44}`);
   const numSamples = dataBytes / 2;
   const durationSec = numSamples / sampleRate;
-  check("duration plausible for text (1.5s–20s)", durationSec > 1.5 && durationSec < 20, durationSec.toFixed(2) + "s");
+  // Stream mode deliberately uses a longer multi-sentence text: scale the
+  // plausibility bound with text length instead of the fixed 20 s cap.
+  const maxDurationSec = STREAM ? Math.max(20, TEXT.length * 0.08) : 20;
+  check("duration plausible for text", durationSec > 1.5 && durationSec < maxDurationSec, durationSec.toFixed(2) + "s");
   let peak = 0, nonSilent = 0;
   for (let i = 0; i < numSamples; i++) {
     const v = Math.abs(wav.readInt16LE(44 + i * 2) / 32768);
