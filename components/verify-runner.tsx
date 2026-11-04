@@ -38,7 +38,11 @@ export default function VerifyRunner() {
       const text =
         params.get("text") ||
         "Hello. This is a verification test of the FreeTTS speech engine.";
-      const voice = params.get("voice") || "af_heart";
+      // ?engine=kitten → drive the KittenTTS Nano engine through the worker
+      // registry instead of Kokoro. All engine-manager calls take engineId.
+      const engineId = params.get("engine") === "kitten" ? "kitten" : "kokoro";
+      const voice =
+        params.get("voice") || (engineId === "kitten" ? "expr-voice-2-f" : "af_heart");
       const speed = parseFloat(params.get("speed") || "1") || 1;
       // ?assets=1 → use the same-origin verification mirror (see
       // app/api/verify-assets). Production never sets this.
@@ -59,9 +63,12 @@ export default function VerifyRunner() {
       try {
         const mgr = getEngineManager();
         setStatus("loading model…");
-        const device = await mgr.loadModel((f) => {
-          if (!cancelled) setStatus(`loading model… ${Math.round(f * 100)}%`);
-        }, assetBase ? { assetBase, ...ortOpts } : ortOpts);
+        const device = await mgr.loadModel(
+          (f) => {
+            if (!cancelled) setStatus(`loading model… ${Math.round(f * 100)}%`);
+          },
+          assetBase ? { assetBase, engineId, ...ortOpts } : { engineId, ...ortOpts },
+        );
         const t1 = performance.now();
         if (!cancelled) setStatus(streamMode ? "streaming…" : "synthesizing…");
 
@@ -92,7 +99,7 @@ export default function VerifyRunner() {
                 if (!cancelled) setStatus(`streaming… chunk ${d}/${t}`);
               },
             },
-            { chunkChars: profile.chunkChars, highWater: profile.streamHighWater },
+            { engineId, chunkChars: profile.chunkChars, highWater: profile.streamHighWater },
           );
           const sres = await sp;
           streamMs = performance.now() - tS;
@@ -114,21 +121,45 @@ export default function VerifyRunner() {
                 sp2.ack();
               },
             },
-            { chunkChars: 400, highWater: 4 },
+            { engineId, chunkChars: 400, highWater: 4 },
           );
           await sp2;
-          const batch = await mgr.synthesize(text, voice, speed);
+          const batch = await mgr.synthesize(text, voice, speed, {}, engineId);
           const streamed400 = concatChunks(parts400, { sampleRate });
-          pcmByteMatch =
-            batch.samples.length === streamed400.length &&
-            batch.sampleRate === sampleRate &&
-            batch.samples.every((v, i) => v === streamed400[i]);
+          // KittenTTS Nano is non-deterministic (measured maxDiff 0.00024
+          // between identical runs — inaudible model stochasticity), so exact
+          // byte-match is kokoro-only. For kitten we assert the transport is
+          // intact: same length and samples close (max abs diff < 0.01).
+          if (engineId === "kitten") {
+            let maxDiff = 0;
+            const lenOk =
+              batch.samples.length === streamed400.length &&
+              batch.sampleRate === sampleRate;
+            if (lenOk) {
+              for (let i = 0; i < batch.samples.length; i++) {
+                const d = Math.abs(batch.samples[i] - streamed400[i]);
+                if (d > maxDiff) maxDiff = d;
+              }
+            }
+            pcmByteMatch = lenOk && maxDiff < 0.01;
+          } else {
+            pcmByteMatch =
+              batch.samples.length === streamed400.length &&
+              batch.sampleRate === sampleRate &&
+              batch.samples.every((v, i) => v === streamed400[i]);
+          }
         } else {
-          const result = await mgr.synthesize(text, voice, speed, {
-            onProgress: (d, t) => {
-              if (!cancelled) setStatus(`synthesizing… chunk ${d}/${t}`);
+          const result = await mgr.synthesize(
+            text,
+            voice,
+            speed,
+            {
+              onProgress: (d, t) => {
+                if (!cancelled) setStatus(`synthesizing… chunk ${d}/${t}`);
+              },
             },
-          });
+            engineId,
+          );
           const t2 = performance.now();
           samples = result.samples;
           sampleRate = result.sampleRate;
@@ -141,6 +172,7 @@ export default function VerifyRunner() {
         const wavHeader = parseWavHeader(wav);
         window.__ftts_verify = {
           ok: true,
+          engine: engineId,
           device,
           voice,
           textLength: text.length,

@@ -1,5 +1,5 @@
 {
-  "date": "2026-11-04T07:39:01.243Z",
+  "date": "2026-11-04T08:27:15.305Z",
   "engine": "kitten-tts-nano-0.8-int8 (KittenML/kitten-tts-nano-0.8-int8, Apache-2.0)",
   "modelBytes": 24369971,
   "voicesNpzBytes": 3278902,
@@ -9,12 +9,12 @@
   "sampleRate": 24000,
   "numSamples": 313600,
   "durationSec": 13.07,
-  "peak": 0.545,
-  "nonSilentFraction": 0.4785,
-  "loadMs": 5882,
-  "phonemizeMs": 1185,
-  "synthMs": 27790,
-  "realtimeFactor": 2.127,
+  "peak": 0.5464,
+  "nonSilentFraction": 0.4798,
+  "loadMs": 8223,
+  "phonemizeMs": 1290,
+  "synthMs": 26491,
+  "realtimeFactor": 2.027,
   "text": "Hello. This is a verification test of the KittenTTS Nano engine. Real neural speech, synthesized locally in your browser.",
   "checks": [
     {
@@ -60,12 +60,12 @@
     {
       "name": "not silent (peak > 0.02)",
       "pass": true,
-      "detail": "0.5450"
+      "detail": "0.5464"
     },
     {
       "name": "non-silent fraction > 0.05",
       "pass": true,
-      "detail": "0.4785"
+      "detail": "0.4798"
     }
   ],
   "pass": true

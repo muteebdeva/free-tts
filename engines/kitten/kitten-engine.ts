@@ -152,6 +152,16 @@ export class KittenEngine implements TTSEngine {
     if (options.signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
     const tokenIds = textToTokenIds(phonemes);
+    // The Nano BERT encoder has a ~512-token position limit: 382 chars
+    // (≈500 tokens) fails in OrtRun with "invalid expand shape" while 196
+    // chars works. Reject clearly instead of surfacing the cryptic ORT
+    // error — callers (the worker) chunk to ≤200 chars.
+    if (tokenIds.length > 450) {
+      throw new Error(
+        `KittenEngine: input too long (${tokenIds.length} tokens > 450). ` +
+          `Split the text into shorter pieces (≤200 chars).`,
+      );
+    }
     const styleRow = this.styleRowFor(voice, clean.length);
 
     const inputs: Record<string, ort.Tensor> = {

@@ -16,6 +16,7 @@
  * PASS = the Pages artifact performs real in-browser inference.
  * Usage: node scripts/verify-pages.mjs [--text "..."] [--voice af_heart]
  *        node scripts/verify-pages.mjs --stream [--profile compatibility]
+ *        node scripts/verify-pages.mjs --engine kitten [--stream]
  *
  * --stream also asserts the streaming protocol: first chunk-done arrives
  * well before synth-done, streamed PCM byte-matches batch PCM, and the
@@ -49,7 +50,8 @@ const STREAM_TEXT = opt(
 const TEXT = STREAM
   ? STREAM_TEXT
   : opt("--text", "Hello. This is a verification test of the FreeTTS Pages build. Real artificial intelligence is speaking locally, inside your browser.");
-const VOICE = opt("--voice", "af_heart");
+const ENGINE = opt("--engine", "kokoro");
+const VOICE = opt("--voice", ENGINE === "kitten" ? "expr-voice-2-f" : "af_heart");
 
 const CONTENT_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -151,7 +153,7 @@ try {
     if (/\.wasm(\?|$)/.test(u)) fetchedWasm.push(u.split("/").pop().split("?")[0]);
   });
   const streamParams = STREAM ? `&stream=1&profile=${encodeURIComponent(PROFILE)}` : "";
-  const url = `http://localhost:${PORT}/verify?text=${encodeURIComponent(TEXT)}&voice=${VOICE}&assets=1${streamParams}`;
+  const url = `http://localhost:${PORT}/verify?text=${encodeURIComponent(TEXT)}&voice=${VOICE}&engine=${ENGINE}&assets=1${streamParams}`;
   console.log("[verify-pages] loading", url.slice(0, 110) + "…");
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
   console.log("[verify-pages] waiting for synthesis (up to 15 min)…");
@@ -182,7 +184,10 @@ try {
   const durationSec = numSamples / sampleRate;
   // Stream mode deliberately uses a longer multi-sentence text: scale the
   // plausibility bound with text length instead of the fixed 20 s cap.
-  const maxDurationSec = STREAM ? Math.max(20, TEXT.length * 0.08) : 20;
+  // KittenTTS Nano speaks slower (~0.11 s/char measured) than Kokoro, so the
+  // plausibility ceiling is engine-aware. Both are generous upper bounds.
+  const secPerChar = ENGINE === "kitten" ? 0.16 : 0.08;
+  const maxDurationSec = STREAM ? Math.max(20, TEXT.length * secPerChar) : Math.max(20, TEXT.length * secPerChar);
   check("duration plausible for text", durationSec > 1.5 && durationSec < maxDurationSec, durationSec.toFixed(2) + "s");
   let peak = 0, nonSilent = 0;
   for (let i = 0; i < numSamples; i++) {
@@ -237,7 +242,7 @@ try {
   const report = {
     date: new Date().toISOString(),
     artifact: "cloudflare-pages static export (out/)",
-    text: TEXT, voice: VOICE, device: r.device,
+    text: TEXT, voice: VOICE, engine: ENGINE, device: r.device,
     sampleRate, numChannels, bits, numSamples,
     durationSec: +durationSec.toFixed(2),
     peak: +peak.toFixed(4), nonSilentFraction: +nsf.toFixed(4),

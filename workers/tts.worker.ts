@@ -217,7 +217,9 @@ self.onmessage = async (event: MessageEvent<InMessage>) => {
         currentAbort = aborter;
         currentRequestId = msg.requestId;
 
-        const chunks = chunkText(msg.text, { maxChars: 400, locale: "en" });
+        // KittenTTS Nano: cap at 200 chars (BERT ~512-token limit; see streaming handler).
+        const batchChunkChars = engineIdOf(msg) === "kitten" ? 200 : 400;
+        const chunks = chunkText(msg.text, { maxChars: batchChunkChars, locale: "en" });
         const waves: Float32Array[] = [];
         let sampleRate = 24000;
 
@@ -256,9 +258,14 @@ self.onmessage = async (event: MessageEvent<InMessage>) => {
         currentAbort = aborter;
         currentRequestId = msg.requestId;
 
-        const chunkChars =
+        let chunkChars =
           msg.chunkChars && msg.chunkChars >= 20 ? msg.chunkChars : 400;
         const highWater = msg.highWater && msg.highWater >= 1 ? msg.highWater : 3;
+        // KittenTTS Nano: the BERT encoder has a ~512-token position limit.
+        // English phonemizes to ~1.3 tokens/char, so 382 chars (≈500 tokens)
+        // fails with "invalid expand shape" while 196 chars works. Cap at
+        // 200 chars (empirically safe; matches the compatibility profile).
+        if (engineIdOf(msg) === "kitten") chunkChars = Math.min(chunkChars, 200);
         streamCtl = { requestId: msg.requestId, unacked: 0, highWater, waiters: [] };
 
         const chunks = chunkText(msg.text, { maxChars: chunkChars, locale: "en" });
