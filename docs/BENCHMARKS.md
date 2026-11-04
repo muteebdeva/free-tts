@@ -38,6 +38,24 @@ the dev/Turbopack bundle; the runs also differ in text length.)
 - The app therefore **tells CPU-only users the truth**: the Studio shows
   "slower than real time — long texts take a while" and offers instant system
   voices as an alternative. No fake progress, no silent stalls.
+
+## KittenTTS Nano (2026-11-04)
+
+**Method:** `scripts/verify-kitten.mjs` (real headless-Chromium run; evidence
+`docs/evidence/kitten-verify.json`). Same VM as above.
+
+| Metric | Value |
+|---|---|
+| Model load (24.4 MB ONNX + 3.3 MB voices.npz + session, localhost) | **5.9–7.5 s** |
+| Phonemization (espeak-ng, in-page) | **1.2–1.3 s** per sentence |
+| Synthesis: 121 chars → 13.07 s audio | **27.8 s** → RTF 2.13 (≈ 0.47×) |
+
+Honest comparison on this VM: KittenTTS Nano int8 (RTF 2.13) synthesizes
+**~2.2–3.3× faster than Kokoro-82M q8** (RTF 4.77–6.96) while downloading
+~3.4× fewer bytes (27 MB vs 92 MB). It is still ~2.1× slower than real time
+here — the "~3× real-time" claim in secondary sources did not reproduce.
+Quality is below Kokoro-82M (15M vs 82M parameters); the trade is size and
+speed for the mobile ladder rung. Phone CPUs unmeasured.
 - On **WebGPU hardware**, third-party measurements (Verso, Sept 2026) report
   **4.3× real-time** with 1.2 s to first audio for Kokoro fp32. We have not
   reproduced this here (no GPU on this VM) — it is cited, not claimed.
