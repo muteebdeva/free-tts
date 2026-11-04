@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Progress } from "@/components/ui/progress";
 import {
   Select,
   SelectContent,
@@ -58,11 +59,14 @@ function VoiceCard({
   voice,
   engine,
   previewing,
+  downloading,
   onPreview,
 }: {
   voice: Voice;
   engine: "kokoro" | "system";
   previewing: boolean;
+  /** True while a preview is waiting on the one-time model download. */
+  downloading: boolean;
   onPreview: () => void;
 }) {
   const grade = engine === "kokoro" ? gradeOf(voice) : null;
@@ -100,7 +104,11 @@ function VoiceCard({
           disabled={previewing}
           onClick={onPreview}
           aria-label={
-            previewing ? `Playing ${voice.name}` : `Preview ${voice.name}`
+            downloading
+              ? `Downloading voice model for ${voice.name}`
+              : previewing
+                ? `Playing ${voice.name}`
+                : `Preview ${voice.name}`
           }
         >
           {previewing ? (
@@ -108,7 +116,7 @@ function VoiceCard({
           ) : (
             <Volume2 className="mr-2 h-3.5 w-3.5" />
           )}
-          {previewing ? "Speaking…" : "Preview"}
+          {previewing ? (downloading ? "Downloading…" : "Speaking…") : "Preview"}
         </Button>
         <Badge variant="outline" className="shrink-0 font-normal">
           {engine === "kokoro" ? "Kokoro · neural" : "System · on-device"}
@@ -127,6 +135,8 @@ export default function VoicesPage() {
     previewingId,
     previewError,
     clearPreviewError,
+    kokoroLoading,
+    loadProgress,
   } = useTTS();
   const [query, setQuery] = useState("");
   const [accent, setAccent] = useState("all");
@@ -221,6 +231,20 @@ export default function VoicesPage() {
           </p>
         </div>
 
+        {/* First-use model download has visible progress — without this the
+            preview button sits on "Speaking…" for the whole download and the
+            tap looks dead. Same copy as the Studio's loading state. */}
+        {kokoroLoading && previewingId && (
+          <div className="space-y-2" aria-live="polite">
+            <Progress value={(loadProgress ?? 0) * 100} />
+            <p className="text-sm text-muted-foreground">
+              {loadProgress === null
+                ? "Preparing voice model… (one-time download, cached after)"
+                : `Downloading voice model… ${Math.round(loadProgress * 100)}% (one-time, cached after)`}
+            </p>
+          </div>
+        )}
+
         <div className="flex flex-wrap gap-3">
           <div className="relative w-full sm:w-56">
             <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -303,6 +327,7 @@ export default function VoicesPage() {
               voice={v}
               engine="kokoro"
               previewing={previewingId === v.id}
+              downloading={previewingId === v.id && kokoroLoading}
               onPreview={() => {
                 void previewVoice(v, "kokoro");
               }}
@@ -347,6 +372,7 @@ export default function VoicesPage() {
                 voice={v}
                 engine="system"
                 previewing={previewingId === v.id}
+                downloading={false}
                 onPreview={() => {
                   void previewVoice(v, "system");
                 }}

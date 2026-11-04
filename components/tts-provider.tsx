@@ -910,7 +910,12 @@ export function TTSProvider({ children }: { children: ReactNode }) {
         const el = (previewAudioRef.current ??= new Audio());
         el.src = cached;
         el.onended = () => setPreviewingId(null);
-        await el.play().catch(() => setPreviewingId(null));
+        await el.play().catch(() => {
+          setPreviewingId(null);
+          setPreviewError(
+            "The browser blocked playback of the cached preview. Tap Preview again to hear it.",
+          );
+        });
         return;
       }
       setPreviewingId(voice.id);
@@ -927,11 +932,17 @@ export function TTSProvider({ children }: { children: ReactNode }) {
           setPreviewingId(null);
         } else {
           // Neural engine (kokoro) via the worker.
-          const slot = { loadedRef: kokoroLoadedRef, setLoaded: setKokoroLoaded };
+          const slot = {
+            loadedRef: kokoroLoadedRef,
+            setLoaded: setKokoroLoaded,
+            setLoading: setKokoroLoading,
+          };
           const mgr = getEngineManager();
           const p = profileRef.current;
           const throttledLoad = createThrottledProgress((f) => setLoadProgress(f));
           if (!slot.loadedRef.current) {
+            slot.setLoading(true);
+            setLoadProgress(null);
             try {
               const dev = await mgr.loadModel(throttledLoad, {
                 engineId: "kokoro",
@@ -948,6 +959,8 @@ export function TTSProvider({ children }: { children: ReactNode }) {
               throw new Error(
                 `The preview needs the voice model (~92 MB, one-time download), which failed to load: ${e instanceof Error ? e.message : String(e)}`,
               );
+            } finally {
+              slot.setLoading(false);
             }
           }
           const result = await mgr.synthesize(PREVIEW_TEXT(voice.name), voice.id, 1, {}, "kokoro");
@@ -959,10 +972,17 @@ export function TTSProvider({ children }: { children: ReactNode }) {
           const el = (previewAudioRef.current ??= new Audio());
           el.src = url;
           el.onended = () => setPreviewingId(null);
-          await el.play().catch(() => setPreviewingId(null));
+          await el.play().catch(() => {
+            // A rejected play() (e.g. autoplay policy) is not a synthesis
+            // failure — say so honestly instead of clearing silently.
+            setPreviewingId(null);
+            setPreviewError(
+              "The preview was synthesized, but the browser blocked playback. Tap Preview again to hear it.",
+            );
+          });
         }
       } catch (e) {
-        // Surfaced by the Studio as a toast — never a silent spinner clear.
+        // Surfaced by the voices page as a toast — never a silent spinner clear.
         setPreviewingId(null);
         setPreviewError(e instanceof Error ? e.message : "Voice preview failed.");
       }

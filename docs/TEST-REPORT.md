@@ -172,7 +172,49 @@ model mirror (`?assets=1`), real Kokoro-82M inference (WASM).
   0.000 ms), no ≥50 ms near-zero run at any joint, stitched sample count
   matches exactly (726 766 vs 726 766).
 
-### 7e. Known gaps remaining (honest)
+### 7e. Pre-release audit follow-up (2026-11-04) — 2 defects investigated, 1 real UX defect fixed
+The audit reported: (1) "History tab is an empty page — no history list UI
+renders"; (2) "Voices page Preview button renders no audible/visible feedback —
+clicking it does nothing the user can perceive." Both were reproduced against
+the production artifact (`out/`) in headless Chromium with real Kokoro-82M
+inference (WASM) via the `?assets=1` model mirror.
+
+**Defect 1 — NOT reproduced; history works end to end.** Full Studio
+generation → 1 entry in `localStorage freetts:history:v1` → `/history` renders
+the entry card with a working Regenerate button (empty state correctly absent).
+The list UI, empty state, delete, clear-all, and the History→Studio
+pending-generate handoff all behave as designed. The audit's "empty page" was
+the honest empty state for a session in which no generation had completed on
+that device/browser (history is localStorage-only, stated on the page itself:
+"stored only on this device"). No code change; verified, not dismissed.
+
+**Defect 2 — CONFIRMED and FIXED.** A cold (first-tap) Kokoro preview showed
+nothing but the card button flipping to "Speaking…" for the entire ~92 MB
+model download + synthesis (observed 40+ s of silence in the sandbox; minutes
+on mobile data): no progress bar, no "Downloading voice model" text anywhere
+on the Voices page — the Studio had this UI, the Voices page never subscribed
+to `loadProgress`/`kokoroLoading`. Worse, the provider's preview path never set
+`kokoroLoading` at all (its `slot` lacked `setLoading`), and `el.play()`
+rejections were swallowed silently (spinner cleared, no toast).
+Fixes (`components/tts-provider.tsx`, `app/voices/page.tsx`):
+- Preview-triggered model load now drives `kokoroLoading`/`loadProgress`
+  (same throttled progress as the Studio).
+- Voices page shows a live download banner (Progress + "Downloading voice
+  model… N% (one-time, cached after)" / "Preparing voice model…"), and the
+  previewing card's button reads "Downloading…" (with matching aria-label)
+  until the model is ready, then "Speaking…" during playback.
+- `play()` rejections now surface an honest toast ("The preview was
+  synthesized, but the browser blocked playback. Tap Preview again to hear
+  it." / cached-preview variant) instead of clearing silently.
+Verified end to end on the rebuilt artifact: tap → "Downloading…" + progress
+bar + percentage → "Speaking…" → `play()` attempted and resolved (`ok:true`),
+spinner clears on end, zero console/page errors. Failure paths: blocked CDN →
+honest "Preview failed: The preview needs the voice model (~92 MB, one-time
+download), which failed to load" toast, spinner clears; forced `play()`
+rejection → honest blocked-playback toast, spinner clears.
+tsc clean, 122/122 vitest green, production build green.
+
+### 7f. Known gaps remaining (honest)
 - Real-device QA (his iPhone) is still the only true validation for audio
   playback, the audio-blocked banner path, and mobile feel — the sandbox
   cannot do this.
