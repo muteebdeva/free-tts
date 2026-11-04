@@ -4,12 +4,13 @@
  * The neural engine stores downloaded assets in two Cache API stores:
  *  - "transformers-cache" — model weights, tokenizer, config (transformers.js)
  *  - "kokoro-voices"      — per-voice embedding files (kokoro-js)
+ *  - "kitten-tts"         — KittenTTS Nano model + voices.npz (kitten engine)
  *
  * These are the ONLY persistent artifacts the app keeps. Generated audio is
  * never persisted (only held in memory until the user downloads it).
  */
 
-export const MODEL_CACHES = ["transformers-cache", "kokoro-voices"] as const;
+export const MODEL_CACHES = ["transformers-cache", "kokoro-voices", "kitten-tts"] as const;
 
 export interface CacheInfo {
   name: string;
