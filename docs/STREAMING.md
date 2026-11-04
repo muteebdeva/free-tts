@@ -38,19 +38,35 @@ device can't race ahead generating audio the user may never hear.
 
 ## Playback
 
-Sequential `<audio>` elements (the iOS-privileged path — zero `AudioContext`
-references in the codebase, unchanged). Two elements ping-pong: while chunk
-*i* plays, chunk *i+1* is preloaded (`preload="auto"` + `.load()`) on the
-idle element. Each played chunk's blob URL is revoked after `ended` (or on
-decode error, which is treated like `ended` so one bad chunk can't stall the
-queue). Each consumed chunk is acked.
+Gapless streaming playback via the Web Audio API (`audio/gapless-player.ts`).
 
-**Documented limitation — inter-chunk gaps.** Sequential `<audio>` playback
-has small gaps between chunks (element swap + decode). WAV is not
-MSE-streamable and AAC-via-WebCodecs would be a project of its own, so
-gapless playback is explicitly out of scope (design doc feasibility flag
-#6). The gaps are disclosed in the Studio UI ("Small gaps between sentences
-are normal").
+Each chunk's raw PCM is trimmed of edge silence (the same `trimSilence`
+policy as the download stitcher) and scheduled as an `AudioBufferSourceNode`
+with a precise start time derived from accumulated chunk durations — chunk
+N+1 begins exactly where chunk N ends, so zero silence is inserted between
+sentences. Consecutive chunks overlap by an 8 ms equal-power crossfade
+(identical curves to `concatChunks`), which de-clicks the joints. The result
+sounds like the stitched WAV download.
+
+Time-to-first-audio is still time-to-first-chunk: the first chunk is
+scheduled at the audio clock's current time the moment it arrives. A chunk
+that arrives late (generation slower than playback) simply starts ASAP —
+the only gap possible is audio that does not exist yet.
+
+**iOS unlock.** The `AudioContext` is created and `resume()`d synchronously
+inside the Generate button's tap gesture (`TTSProvider.generate`) — iOS
+Safari will not unlock it if creation is deferred. A one-time `pointerdown`
+backup re-resumes if the first attempt raced.
+
+**Fallback.** If Web Audio is unavailable (`unlock()` false), the legacy
+ping-pong `<audio>` path is used: per-chunk WAV blob URLs played
+sequentially with preload of the next chunk. It has small inter-chunk gaps
+(element swap + decode) but is always audible — never silence. Each played
+chunk is acked in both paths (backpressure); the stream ends when the last
+scheduled chunk finishes (`endedChunks == totalChunks`).
+
+Supersedes the old documented limitation: gapless playback was previously
+out of scope (feasibility flag #6); the `<audio>`-only constraint is gone.
 
 ## Cancellation / Stop
 

@@ -50,7 +50,12 @@ export default function VerifyRunner() {
       // ?stream=1 → exercise the streaming protocol (synthesizeStream) and
       // the streamed-vs-batch byte-match regression. ?profile=… selects the
       // device profile's chunk/thread policy for the run.
+      // ?gapless=1 (with stream=1) → additionally drive every streamed
+      // chunk through the real GaplessPlayer (Web Audio scheduling) exactly
+      // like the Studio provider does, and report its timeline so the gate
+      // can assert back-to-back scheduling with zero inserted silence.
       const streamMode = params.get("stream") === "1";
+      const gaplessMode = params.get("gapless") === "1";
       const profileName = (params.get("profile") || "balanced") as DeviceProfileName;
       const profile = getProfile(profileName) ?? getProfile("balanced");
       const ortOpts = {
@@ -78,12 +83,28 @@ export default function VerifyRunner() {
         let firstChunkMs: number | null = null;
         let pcmByteMatch: boolean | null = null;
         let streamMs = 0;
+        // Gapless harness: schedule every streamed chunk through the real
+        // player, exactly as the Studio provider does (minus the UI).
+        let gaplessReport: {
+          timeline: Array<{ index: number; start: number; duration: number }>;
+          trimmedLengths: number[];
+          audioRunning: boolean;
+          unlockOk: boolean;
+        } | null = null;
 
         if (streamMode) {
           // (a) Profile-chunked streaming run: time-to-first-chunk. Every
           // chunk is acked immediately (no playback in the harness).
           const parts: Float32Array[] = [];
           const tS = performance.now();
+          // Gapless mode: after collecting the chunks, drive them through the
+          // real GaplessPlayer in a tight loop (not as they arrive). This
+          // isolates the scheduling math under test: on this CPU the engine
+          // is slower than realtime, so as-arrived feeding would show
+          // unavoidable generation gaps (audio that doesn't exist yet),
+          // not scheduling gaps. Late-arrival behavior is unit-tested.
+          let gaplessPlayer: import("@/audio/gapless-player").GaplessPlayer | null = null;
+          let gaplessUnlockOk = false;
           const sp = mgr.synthesizeStream(
             text,
             voice,
@@ -106,6 +127,22 @@ export default function VerifyRunner() {
           sampleRate = sres.sampleRate;
           chunkCount = sres.chunkCount;
           samples = concatChunks(parts, { sampleRate });
+          if (gaplessMode) {
+            if (!cancelled) setStatus("streaming… gapless schedule check");
+            const mod = await import("@/audio/gapless-player");
+            gaplessPlayer = new mod.GaplessPlayer();
+            gaplessUnlockOk = gaplessPlayer.unlock();
+            for (let i = 0; i < parts.length; i++) {
+              gaplessPlayer.playChunk(parts[i], sampleRate);
+            }
+            gaplessReport = {
+              timeline: gaplessPlayer.timeline.map((t) => ({ ...t })),
+              trimmedLengths: [...gaplessPlayer.trimmedLengths],
+              audioRunning: gaplessPlayer.running,
+              unlockOk: gaplessUnlockOk,
+            };
+            gaplessPlayer.dispose();
+          }
           // (b) Byte-match control: stream and batch with IDENTICAL chunking
           // (400 chars, the batch default) — regression: the streaming
           // transport (transfers, ordering, concat) must not change audio.
@@ -187,6 +224,7 @@ export default function VerifyRunner() {
           firstChunkMs: firstChunkMs === null ? null : Math.round(firstChunkMs),
           streamMs: Math.round(streamMs),
           pcmByteMatch,
+          gapless: gaplessReport,
           // base64 for independent Node-side validation + evidence file
           wavBase64: uint8ToBase64(wav),
         };

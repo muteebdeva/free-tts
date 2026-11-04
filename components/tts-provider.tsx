@@ -7,14 +7,15 @@
  * voice lists, generation lifecycle, and preview-audio caching. Pages and
  * components consume this context — nobody talks to engines directly.
  *
- * Streaming: Kokoro generation runs through `synthesizeStream`. Each chunk's
- * PCM is retained (for WAV/MP3 export via concat on demand), wrapped in a
- * per-chunk WAV blob URL, and played sequentially through two ping-ponging
- * <audio> elements (the iOS-privileged playback path — no AudioContext).
- * While chunk i plays, chunk i+1 is preloaded on the idle element. Blob URLs
- * are revoked after `ended`; each consumed chunk is acked back to the worker
- * (backpressure). Small inter-chunk gaps are inherent to sequential <audio>
- * playback and are documented, not hidden.
+ * Streaming: neural generation runs through `synthesizeStream`. Each chunk's
+ * PCM is retained (for WAV/MP3 export via concat on demand) and played
+ * gaplessly: a Web Audio GaplessPlayer schedules each chunk's AudioBuffer
+ * back-to-back with precise start times (8 ms equal-power crossfade at the
+ * joints, mirroring the download stitcher), so sentences flow with zero
+ * inserted silence. The AudioContext is created/resumed synchronously in
+ * the Generate tap gesture (iOS unlock); if Web Audio is unavailable the
+ * legacy ping-pong <audio> path is used instead (gaps, but audible — never
+ * silence). Each played chunk is acked back to the worker (backpressure).
  */
 import {
   createContext,
@@ -32,6 +33,7 @@ import type { Voice } from "@/engines/engine-interface";
 import { validateTextInput } from "@/lib/text-chunk";
 import { encodeWav } from "@/audio/wav-encoder";
 import { concatChunks } from "@/audio/concat";
+import { GaplessPlayer } from "@/audio/gapless-player";
 import { StreamQueue } from "@/lib/stream-queue";
 import { createThrottledProgress } from "@/lib/throttle";
 import {
@@ -82,6 +84,16 @@ interface StreamState {
   synthDone: boolean;
   currentChunk: QueuedChunk | null;
   userStopped: boolean;
+  /**
+   * Gapless Web Audio playback. Non-null when the AudioContext unlock
+   * succeeded in the Generate tap gesture; null => the legacy ping-pong
+   * <audio> path (queue/els/currentChunk) is used instead.
+   */
+  gapless: GaplessPlayer | null;
+  /** Chunks whose playback ended (gapless path drives finishStreamReady). */
+  endedChunks: number;
+  /** Total chunks for this stream (known at synth-done). */
+  totalChunks: number | null;
 }
 
 interface TTSContextValue {
@@ -242,6 +254,11 @@ export function TTSProvider({ children }: { children: ReactNode }) {
       const s = streamRef.current;
       streamRef.current = null;
       if (s) {
+        if (s.gapless) {
+          s.gapless.stop();
+          s.gapless.dispose();
+          s.gapless = null;
+        }
         for (const el of s.els) {
           try { el.pause(); } catch { /* ignore */ }
           el.onended = null;
@@ -308,6 +325,11 @@ export function TTSProvider({ children }: { children: ReactNode }) {
   const finishStreamReady = useCallback((s: StreamState) => {
     if (streamRef.current !== s) return;
     streamRef.current = null;
+    if (s.gapless) {
+      // Playback finished: release the AudioContext.
+      s.gapless.dispose();
+      s.gapless = null;
+    }
     setPhase("ready");
     setSynthProgress(null);
     clearGenerateFlag();
@@ -321,6 +343,13 @@ export function TTSProvider({ children }: { children: ReactNode }) {
   const finishStreamPartial = useCallback(
     (s: StreamState) => {
       if (streamRef.current === s) streamRef.current = null;
+      if (s.gapless) {
+        // Silence gapless playback; ack each scheduled-but-unplayed chunk
+        // (backpressure accounting — safe no-ops once the job is aborted).
+        for (const _ of s.gapless.stop()) s.stream.ack();
+        s.gapless.dispose();
+        s.gapless = null;
+      }
       for (const el of s.els) {
         try { el.pause(); } catch { /* ignore */ }
         el.onended = null;
@@ -356,6 +385,11 @@ export function TTSProvider({ children }: { children: ReactNode }) {
     const s = streamRef.current;
     streamRef.current = null;
     if (!s) return;
+    if (s.gapless) {
+      s.gapless.stop();
+      s.gapless.dispose();
+      s.gapless = null;
+    }
     for (const el of s.els) {
       try { el.pause(); } catch { /* ignore */ }
       el.onended = null;
@@ -370,7 +404,9 @@ export function TTSProvider({ children }: { children: ReactNode }) {
   /** Advance sequential chunk playback (ping-pong <audio> elements). */
   const pumpStream = useCallback(() => {
     const s = streamRef.current;
-    if (!s || s.playing || s.userStopped) return;
+    // Gapless path needs no pumping: chunks are scheduled with precise
+    // start times the moment they arrive (see handleStreamChunk).
+    if (!s || s.playing || s.userStopped || s.gapless) return;
     const next = s.queue.shift();
     if (!next) {
       if (s.synthDone) finishStreamReady(s);
@@ -416,16 +452,25 @@ export function TTSProvider({ children }: { children: ReactNode }) {
       // Retain PCM for export even if we never play this chunk.
       s.pcmParts.push(chunk.samples);
       s.sampleRate = chunk.sampleRate;
+      if (s.userStopped || streamRef.current !== s) {
+        // Late chunk after Stop/teardown: keep PCM, ack immediately.
+        s.stream.ack();
+        return;
+      }
+      if (s.gapless) {
+        // Gapless Web Audio path: schedule back-to-back with precise start
+        // times. The player's onChunkEnded fires the ack per played chunk.
+        s.gapless.playChunk(chunk.samples, chunk.sampleRate);
+        if (phaseRef.current === "synthesizing") {
+          // First audio is here: time-to-first-audio = time-to-first-chunk.
+          setPhase("streaming");
+        }
+        return;
+      }
       const wav = encodeWav(chunk.samples, { sampleRate: chunk.sampleRate });
       const url = URL.createObjectURL(
         new Blob([wav as unknown as BlobPart], { type: "audio/wav" }),
       );
-      if (s.userStopped || streamRef.current !== s) {
-        // Late chunk after Stop/teardown: keep PCM, ack immediately.
-        URL.revokeObjectURL(url);
-        s.stream.ack();
-        return;
-      }
       const rec: QueuedChunk = { index: chunk.index, url, samples: chunk.samples };
       if (!s.queue.push(rec)) {
         // Unreachable in practice: the worker pauses at the high-water mark.
@@ -454,6 +499,7 @@ export function TTSProvider({ children }: { children: ReactNode }) {
       text: string,
       voiceId: string,
       speed: number,
+      gapless: GaplessPlayer | null,
     ) => {
       // Per-engine state slots — one neural engine is active at a time.
       const slot =
@@ -521,7 +567,28 @@ export function TTSProvider({ children }: { children: ReactNode }) {
           synthDone: false,
           currentChunk: null,
           userStopped: false,
+          gapless,
+          endedChunks: 0,
+          totalChunks: null,
         };
+        if (gapless) {
+          // Ack each chunk as it finishes playing (backpressure), and end
+          // the stream once the last scheduled chunk has played out. The
+          // closure reads s.stream once the stream exists below.
+          gapless.setEvents({
+            onChunkEnded: () => {
+              s.stream.ack();
+              s.endedChunks++;
+              if (
+                s.synthDone &&
+                s.totalChunks !== null &&
+                s.endedChunks >= s.totalChunks
+              ) {
+                finishStreamReady(s);
+              }
+            },
+          });
+        }
         const stream = mgr.synthesizeStream(
           text,
           voiceId,
@@ -541,8 +608,16 @@ export function TTSProvider({ children }: { children: ReactNode }) {
         // built now so replay/download are ready the moment it drains.
         s.synthDone = true;
         s.sampleRate = result.sampleRate;
+        s.totalChunks = result.chunkCount;
         buildStreamAudioUrl(s);
-        pumpStream();
+        if (s.gapless) {
+          // Gapless path has no queue to drain: finish when the last
+          // scheduled chunk ends (the onChunkEnded handler counts up to
+          // totalChunks; it may already have been reached).
+          if (s.endedChunks >= s.totalChunks) finishStreamReady(s);
+        } else {
+          pumpStream();
+        }
       } catch (e) {
         const s = streamRef.current;
         if (e instanceof DOMException && e.name === "AbortError") {
@@ -588,6 +663,17 @@ export function TTSProvider({ children }: { children: ReactNode }) {
       markGenerateStart();
       teardownStream();
 
+      // Gapless playback needs the AudioContext created AND resumed
+      // synchronously inside this tap gesture — iOS Safari will not unlock
+      // it if creation is deferred past the click handler. unlock() false
+      // => the legacy <audio> ping-pong path (gaps, but audible).
+      let gapless: GaplessPlayer | null = null;
+      if (engineChoiceRef.current !== "system") {
+        const candidate = new GaplessPlayer();
+        if (candidate.unlock()) gapless = candidate;
+        else candidate.dispose();
+      }
+
       if (engineChoiceRef.current === "system") {
         // Tier-0 fallback: speak directly, no downloadable audio.
         if (!systemEngineRef.current) systemEngineRef.current = new SystemEngine();
@@ -605,12 +691,21 @@ export function TTSProvider({ children }: { children: ReactNode }) {
       }
 
             // Neural engines (kokoro | kitten) via the worker, streaming.
-      return generateNeural(
-        engineChoiceRef.current === "kitten" ? "kitten" : "kokoro",
-        text,
-        voiceId,
-        speed,
-      );
+      // The gapless player is disposed by the stream lifecycle
+      // (teardownStream / finishStreamPartial / finishStreamReady paths);
+      // if generateNeural throws before the stream starts, dispose here.
+      try {
+        return await generateNeural(
+          engineChoiceRef.current === "kitten" ? "kitten" : "kokoro",
+          text,
+          voiceId,
+          speed,
+          gapless,
+        );
+      } catch (e) {
+        gapless?.dispose();
+        throw e;
+      }
     },
     [
       fail,

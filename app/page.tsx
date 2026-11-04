@@ -280,8 +280,8 @@ export default function StudioPage() {
       </div>
       {phase === "streaming" && (
         <p className="text-xs text-muted-foreground">
-          Audio plays sentence-by-sentence as it is generated. Small gaps
-          between sentences are normal.
+          Audio streams as it is generated — playback is continuous, with no
+          gaps between sentences.
         </p>
       )}
 

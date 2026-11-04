@@ -16,8 +16,9 @@
  *  - batch mode (`synthesize`) is retained for the verify harness's
  *    streamed-vs-batch byte-match regression test.
  *
- * The main thread never touches the model. WAV/MP3 encoding and playback
- * stay on the main thread (playback is <audio>-only; no AudioContext).
+ * The main thread never touches the model. WAV/MP3 encoding stays on the
+ * main thread; streaming playback is gapless Web Audio scheduling
+ * (audio/gapless-player.ts) with a legacy <audio> fallback.
  */
 import { KokoroEngine } from "../engines/kokoro/kokoro-engine";
 import { KittenEngine } from "../engines/kitten/kitten-engine";
