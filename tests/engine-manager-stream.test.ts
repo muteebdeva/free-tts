@@ -234,3 +234,87 @@ describe("worker rebirth", () => {
     expect(workers[0].terminated).toBe(true);
   });
 });
+
+describe("engineId routing (kokoro | kitten)", () => {
+  it("getVoices posts the requested engineId, kokoro by default", async () => {
+    const workers: FakeWorker[] = [];
+    const mgr = makeManager(workers);
+    const p1 = mgr.getVoices("kitten");
+    const p2 = mgr.getVoices();
+    const w = workers[0];
+    const reqs = w.postedOfType("voices");
+    expect(reqs).toHaveLength(2);
+    expect(reqs[0].engineId).toBe("kitten");
+    expect(reqs[1].engineId).toBe("kokoro");
+    w.emit({ type: "voices", requestId: reqs[0].requestId, voices: [{ id: "k1" }] });
+    w.emit({ type: "voices", requestId: reqs[1].requestId, voices: [{ id: "k0" }] });
+    await expect(p1).resolves.toEqual([{ id: "k1" }]);
+    await expect(p2).resolves.toEqual([{ id: "k0" }]);
+  });
+
+  it("getDevice posts the requested engineId, kokoro by default", async () => {
+    const workers: FakeWorker[] = [];
+    const mgr = makeManager(workers);
+    const p1 = mgr.getDevice("kitten");
+    const p2 = mgr.getDevice();
+    const w = workers[0];
+    const reqs = w.postedOfType("device");
+    expect(reqs[0].engineId).toBe("kitten");
+    expect(reqs[1].engineId).toBe("kokoro");
+    w.emit({ type: "device", requestId: reqs[0].requestId, device: "wasm" });
+    w.emit({ type: "device", requestId: reqs[1].requestId, device: "webgpu" });
+    await expect(p1).resolves.toBe("wasm");
+    await expect(p2).resolves.toBe("webgpu");
+  });
+
+  it("loadModel posts the requested engineId, kokoro by default", async () => {
+    const workers: FakeWorker[] = [];
+    const mgr = makeManager(workers);
+    const p1 = mgr.loadModel(undefined, { engineId: "kitten" });
+    const p2 = mgr.loadModel();
+    const w = workers[0];
+    const reqs = w.postedOfType("load");
+    expect(reqs[0].engineId).toBe("kitten");
+    expect(reqs[1].engineId).toBe("kokoro");
+    w.emit({ type: "loaded", requestId: reqs[0].requestId, device: "wasm" });
+    w.emit({ type: "loaded", requestId: reqs[1].requestId, device: "webgpu" });
+    await expect(p1).resolves.toBe("wasm");
+    await expect(p2).resolves.toBe("webgpu");
+  });
+
+  it("synthesizeStream posts the requested engineId, kokoro by default", async () => {
+    const workers: FakeWorker[] = [];
+    const mgr = makeManager(workers);
+    const sp1 = mgr.synthesizeStream("Hello.", "v1", 1, {}, { engineId: "kitten", chunkStallMs: 60_000 });
+    const sp2 = mgr.synthesizeStream("Hello.", "v1", 1, {}, { chunkStallMs: 60_000 });
+    const w = workers[0];
+    const reqs = w.postedOfType("synthesize-stream");
+    expect(reqs).toHaveLength(2);
+    expect(reqs[0].engineId).toBe("kitten");
+    expect(reqs[1].engineId).toBe("kokoro");
+    // Settle both streams so no dangling promises keep the test open.
+    for (const req of reqs) {
+      w.emit({ type: "synth-done", requestId: req.requestId, sampleRate: 24000, chunkCount: 0 });
+    }
+    await expect(sp1).resolves.toEqual({ sampleRate: 24000, chunkCount: 0 });
+    await expect(sp2).resolves.toEqual({ sampleRate: 24000, chunkCount: 0 });
+  });
+
+  it("synthesize (batch) posts the requested engineId, kokoro by default", async () => {
+    const workers: FakeWorker[] = [];
+    const mgr = makeManager(workers);
+    const p1 = mgr.synthesize("Hello.", "v1", 1, {}, "kitten");
+    const w = workers[0];
+    const reqs = w.postedOfType("synthesize");
+    expect(reqs).toHaveLength(1);
+    expect(reqs[0].engineId).toBe("kitten");
+    w.emit({
+      type: "synth-done",
+      requestId: reqs[0].requestId,
+      sampleRate: 24000,
+      samples: new Float32Array([0.1]),
+    });
+    const r = await p1;
+    expect(r.sampleRate).toBe(24000);
+  });
+});
