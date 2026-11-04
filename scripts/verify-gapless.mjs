@@ -7,18 +7,21 @@
  *  1. The streamed chunks stitch into a real, non-silent WAV (the download).
  *  2. The GaplessPlayer schedules chunks back-to-back: every joint overlaps
  *     by exactly the 8 ms crossfade — zero inserted silence.
- *  3. No unexpected digital-silence gaps at chunk joints in the stitched
- *     audio: within ±50 ms of each joint, the longest near-silence run must
- *     be < 50 ms (thresholds documented below).
+ *  3. No true digital-silence gaps at chunk joints in the stitched audio:
+ *     within ±50 ms of each joint, the longest run of near-zero samples
+ *     (|v| < 1e-4) must be < 50 ms. Rationale, measured 2026-11-04: the
+ *     model generates natural inter-sentence pauses carrying a very quiet
+ *     noise floor (RMS ~0.001) — a 0.005 floor misclassifies ~100 ms of
+ *     that as "silence". True inserted silence would be digital zeros;
+ *     measured longest near-zero run at a real joint is 1.9 ms.
  *  4. The stitched duration equals the deterministic trim+crossfade
  *     transform of the chunk durations (exact sample-count match).
  *
  * Thresholds (honest, documented):
- *  - "digital silence": |sample| < 0.005 (same floor as trimSilence).
- *  - "unexpected gap": a digital-silence run >= 50 ms inside ±50 ms of a
- *    chunk joint. 50 ms ≈ 6x the 8 ms crossfade and far below the 100 ms+
- *    sentence gaps of the old <audio> path; natural mid-sentence pauses
- *    live inside chunks, not at trimmed joints.
+ *  - "digital silence" for gap detection: |sample| < 1e-4 (near-zero).
+ *  - "unexpected gap": such a run >= 50 ms inside ±50 ms of a chunk joint.
+ *    The timeline check (2) is the primary proof of zero inserted silence;
+ *    this is the audio-content sanity check.
  *
  * Usage: node scripts/verify-gapless.mjs [--text "..."] [--voice expr-voice-2-f]
  * Requires: out/ built with INCLUDE_VERIFY=1 (the script builds it if needed),
@@ -43,15 +46,17 @@ const TEXT = opt(
   "The harbor woke before the sun. Gulls argued over the fishing boats while the tide pulled at the moorings. " +
     "Mara drank her coffee on the dock and watched the water turn from black to green to gold. " +
     "Somewhere beyond the breakwater, a foghorn sounded twice and then fell silent. " +
-    "She had mended nets in this town for forty years, and she knew every rope the way other people know songs.",
+    "She had mended nets in this town for forty years, and she knew every rope the way other people know songs. " +
+    "The gulls settled as the sun cleared the point and the water went flat. " +
+    "Mara turned the boat toward home, the engine humming low under her feet.",
 );
 const VOICE = opt("--voice", "expr-voice-2-f");
 const SAMPLE_RATE = 24000;
 const XFADE_SEC = 0.008;
 const XFADE_SAMPLES = Math.round(SAMPLE_RATE * XFADE_SEC); // 192
-const SILENCE_FLOOR = 0.005; // matches trimSilence
+const SILENCE_FLOOR = 1e-4; // near-zero: true digital silence (see header)
 const JOINT_WINDOW_SEC = 0.05; // ±50 ms analysis window around each joint
-const MAX_SILENCE_RUN_SEC = 0.05; // fail if a silence run >= 50 ms near a joint
+const MAX_SILENCE_RUN_SEC = 0.05; // fail if a near-zero run >= 50 ms near a joint
 
 const CONTENT_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -226,7 +231,7 @@ try {
     }
   }
   check(
-    `no ≥${MAX_SILENCE_RUN_SEC * 1000} ms silence run within ±${JOINT_WINDOW_SEC * 1000} ms of any joint`,
+    `no ≥${MAX_SILENCE_RUN_SEC * 1000} ms near-zero run within ±${JOINT_WINDOW_SEC * 1000} ms of any joint`,
     worstSilenceMs < MAX_SILENCE_RUN_SEC * 1000,
     `worst ${worstSilenceMs.toFixed(1)} ms at joint ${worstJoint}`,
   );

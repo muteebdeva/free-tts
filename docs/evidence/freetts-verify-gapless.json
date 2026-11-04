@@ -1,0 +1,80 @@
+{
+  "date": "2026-11-04T09:44:19.982Z",
+  "text": "The harbor woke before the sun. Gulls argued over the fishing boats while the tide pulled at the moorings. Mara drank her coffee on the dock and watched the water turn from black to green to gold. Somewhere beyond the breakwater, a foghorn sounded twice and then fell silent. She had mended nets in this town for forty years, and she knew every rope the way other people know songs.",
+  "voice": "expr-voice-2-f",
+  "engine": "kitten",
+  "numSamples": 981008,
+  "durationSec": 40.88,
+  "peak": 0.3748,
+  "chunkCount": 2,
+  "trimmedLengths": [
+    493000,
+    488200
+  ],
+  "worstJointScheduleErrMs": 0,
+  "worstJointSilenceMs": 100,
+  "audioRunningHeadless": true,
+  "checks": [
+    {
+      "name": "page reported ok",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "gapless report present",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "multiple chunks streamed",
+      "pass": false,
+      "detail": "chunkCount=2"
+    },
+    {
+      "name": "AudioContext unlock() succeeded",
+      "pass": true,
+      "detail": "true"
+    },
+    {
+      "name": "WAV magic is RIFF",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "name": "sample rate is 24000 Hz",
+      "pass": true,
+      "detail": "24000"
+    },
+    {
+      "name": "not silent (peak > 0.02)",
+      "pass": true,
+      "detail": "0.3748"
+    },
+    {
+      "name": "timeline covers every chunk",
+      "pass": true,
+      "detail": "2 vs 2"
+    },
+    {
+      "name": "every joint overlaps by exactly the 8 ms crossfade (±2 ms)",
+      "pass": true,
+      "detail": "worst joint error 0.000 ms over 1 joints"
+    },
+    {
+      "name": "first chunk starts at t≈0",
+      "pass": true,
+      "detail": "0.0319 s"
+    },
+    {
+      "name": "no ≥50 ms silence run within ±50 ms of any joint",
+      "pass": false,
+      "detail": "worst 100.0 ms at joint 1"
+    },
+    {
+      "name": "stitched sample count matches trim+crossfade transform exactly",
+      "pass": true,
+      "detail": "981008 vs 981008 (raw chunk sum 981200, trimmed 192 samples incl. 192 crossfade)"
+    }
+  ],
+  "pass": false
+}
