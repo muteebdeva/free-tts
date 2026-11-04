@@ -1,0 +1,155 @@
+/**
+ * Kokoro-82M engine: TTSEngine implementation on top of `kokoro-js`.
+ *
+ * Runs 100% in the browser via @huggingface/transformers + onnxruntime-web.
+ * Device policy: WebGPU (fp32) when `navigator.gpu` exists, otherwise WASM
+ * (q8 quantized) — per the kokoro-js README recommendation.
+ *
+ * Honest limits (surfaced in `capabilities` and the UI):
+ *  - English only (kokoro-js 1.2.1: 28 voices, English phonemization).
+ *  - No voice cloning; fixed preset voices.
+ *  - Cancellation is cooperative: an abort is honoured between inference
+ *    calls, but an in-flight ONNX forward pass cannot be interrupted.
+ */
+import { KokoroTTS } from "kokoro-js";
+import type {
+  EngineCapabilities,
+  GenerationOptions,
+  SynthesisResult,
+  TTSEngine,
+  Voice,
+} from "../engine-interface";
+import { DEFAULT_VOICE_ID, KOKORO_VOICES, isKnownVoice } from "./voices";
+
+const MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
+const SAMPLE_RATE = 24000;
+
+type DeviceKind = "webgpu" | "wasm";
+
+function detectDevice(): DeviceKind {
+  // navigator.gpu is undefined on browsers without WebGPU (e.g. Firefox
+  // stable without flags, older Safari). Note: presence of the API does not
+  // guarantee a usable adapter — load() falls back to WASM on failure.
+  return typeof navigator !== "undefined" && "gpu" in navigator
+    ? "webgpu"
+    : "wasm";
+}
+
+export class KokoroEngine implements TTSEngine {
+  readonly id = "kokoro";
+  readonly label = "Kokoro 82M";
+
+  readonly capabilities: EngineCapabilities = {
+    languages: ["en-US", "en-GB"],
+    speedControl: true,
+    audioExport: true,
+    limitations: [
+      "English only — this build ships 28 English voices with English phonemization.",
+      "Fastest with WebGPU; on CPU-only devices synthesis runs slower than real time.",
+      "Fixed preset voices — voice cloning is not supported.",
+      "Generation cannot be interrupted mid-sentence; cancel applies between sentences.",
+    ],
+  };
+
+  private tts: KokoroTTS | null = null;
+  private loading: Promise<void> | null = null;
+  private device: DeviceKind = detectDevice();
+
+  /** Which execution path was selected ("webgpu" | "wasm"). */
+  get activeDevice(): DeviceKind {
+    return this.device;
+  }
+
+  isLoaded(): boolean {
+    return this.tts !== null;
+  }
+
+  load(onProgress?: (fraction: number) => void): Promise<void> {
+    if (this.tts) return Promise.resolve();
+    if (this.loading) return this.loading;
+
+    this.loading = (async () => {
+      const dtype = this.device === "webgpu" ? "fp32" : "q8";
+      try {
+        this.tts = await KokoroTTS.from_pretrained(MODEL_ID, {
+          dtype,
+          device: this.device,
+          progress_callback: onProgress
+            ? (info: { progress?: number }) => {
+                // transformers.js reports per-file progress; clamp to 0..1.
+                const p = info?.progress;
+                if (typeof p === "number") onProgress(Math.min(1, Math.max(0, p / 100)));
+              }
+            : undefined,
+        });
+      } catch (err) {
+        // If WebGPU was selected but the adapter fails (e.g. SwiftShader
+        // issues, disabled GPU), retry once on WASM before giving up.
+        if (this.device === "webgpu") {
+          this.device = "wasm";
+          this.tts = await KokoroTTS.from_pretrained(MODEL_ID, {
+            dtype: "q8",
+            device: "wasm",
+            progress_callback: onProgress
+              ? (info: { progress?: number }) => {
+                  const p = info?.progress;
+                  if (typeof p === "number") onProgress(Math.min(1, Math.max(0, p / 100)));
+                }
+              : undefined,
+          });
+        } else {
+          throw err;
+        }
+      }
+    })();
+
+    // Clear the in-flight marker when settled so a failed load can be retried.
+    this.loading.then(
+      () => { this.loading = null; },
+      () => { this.loading = null; },
+    );
+    return this.loading;
+  }
+
+  async getVoices(): Promise<Voice[]> {
+    return KOKORO_VOICES;
+  }
+
+  async synthesize(
+    text: string,
+    voiceId: string,
+    options: GenerationOptions = {},
+  ): Promise<SynthesisResult> {
+    if (!this.tts) throw new Error("KokoroEngine: load() before synthesize()");
+    if (options.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    const voice = isKnownVoice(voiceId) ? voiceId : DEFAULT_VOICE_ID;
+    const speed = clampSpeed(options.speed ?? 1);
+
+    // kokoro-js has no AbortSignal support: check before and after inference.
+    const audio = await this.tts.generate(text, { voice: voice as never, speed });
+    if (options.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+
+    // audio is RawAudio { data: Float32Array, sampling_rate: 24000 }.
+    const data = audio.data as Float32Array;
+    return {
+      samples: data.slice(), // copy: the buffer may be reused internally
+      sampleRate: SAMPLE_RATE,
+    };
+  }
+
+  async unload(): Promise<void> {
+    // kokoro-js/transformers.js v1.2.1 era exposes no model.dispose() on the
+    // wrapper; dropping references lets the page reclaim JS memory. The
+    // onnxruntime-web WASM heap is process-global and cannot be freed per
+    // model — documented in ARCHITECTURE.md.
+    this.tts = null;
+    this.loading = null;
+  }
+}
+
+function clampSpeed(speed: number): number {
+  if (!Number.isFinite(speed)) return 1;
+  return Math.min(2, Math.max(0.5, speed));
+}
+
+export { DEFAULT_VOICE_ID };
