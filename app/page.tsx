@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { X } from "lucide-react";
 import {
   AlertTriangle,
   Cpu,
@@ -38,16 +39,23 @@ export default function StudioPage() {
     engineChoice, setEngineChoice,
     voices, systemVoices,
     phase, synthProgress, loadProgress, kokoroLoading, device,
-    error, dismissError, ensureVoices,
+    error, dismissError, ensureVoices, profile, wasInterrupted,
   } = tts;
 
   const [text, setText] = useState("");
   const [voiceId, setVoiceId] = useState(DEFAULT_VOICE_ID);
   const [speed, setSpeed] = useState(1);
+  const [showSentinel, setShowSentinel] = useState(false);
 
   useEffect(() => {
     void ensureVoices();
   }, [ensureVoices]);
+
+  // Jetsam sentinel: a stale flag means the last tab died mid-generate
+  // (on iOS, the signature of a memory kill) — one-time honest notice.
+  useEffect(() => {
+    if (wasInterrupted()) setShowSentinel(true);
+  }, [wasInterrupted]);
 
   const voiceList = engineChoice === "kokoro" ? voices : systemVoices;
 
@@ -63,15 +71,29 @@ export default function StudioPage() {
     }
   }, [voiceList, voiceId, engineChoice]);
 
-  const busy = phase === "loading-model" || phase === "synthesizing" || kokoroLoading;
+  const busy =
+    phase === "loading-model" ||
+    phase === "synthesizing" ||
+    phase === "streaming" ||
+    kokoroLoading;
   const canGenerate = !busy && text.trim().length > 0 && text.length <= MAX_CHARS;
 
   const statusLine = useMemo(() => {
     if (phase === "loading-model")
-      return `Downloading voice model… ${Math.round(loadProgress * 100)}% (one-time, cached after)`;
+      return loadProgress === null
+        ? "Preparing voice model… (one-time download, cached after)"
+        : `Downloading voice model… ${Math.round(loadProgress * 100)}% (one-time, cached after)`;
     if (phase === "synthesizing" && synthProgress)
       return `Speaking… sentence ${synthProgress.done} of ${synthProgress.total}`;
     if (phase === "synthesizing") return "Speaking…";
+    if (phase === "streaming" && synthProgress)
+      return synthProgress.done >= synthProgress.total
+        ? `Playing… finishing up (${synthProgress.total} of ${synthProgress.total} sentences)`
+        : `Playing — still generating (sentence ${synthProgress.done} of ${synthProgress.total})`;
+    if (phase === "streaming") return "Playing…";
+    if (phase === "ready-partial" && synthProgress)
+      return `Stopped — partial audio kept (${synthProgress.done} of ${synthProgress.total} sentences). You can play or download it below.`;
+    if (phase === "ready-partial") return "Stopped — partial audio kept.";
     return null;
   }, [phase, loadProgress, synthProgress]);
 
@@ -88,6 +110,35 @@ export default function StudioPage() {
           anywhere.
         </p>
       </div>
+
+      {/* Jetsam sentinel notice (one-time) */}
+      {showSentinel && (
+        <Alert>
+          <AlertTriangle className="h-4 w-4" />
+          <AlertDescription className="flex items-center justify-between gap-4">
+            <span>
+              The last session was interrupted — your device may be low on
+              memory. System voices are the safest choice here.
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowSentinel(false)}
+              aria-label="Dismiss"
+            >
+              <X className="h-3.5 w-3.5" />
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* Compatibility-path transparency (Track A ladder) */}
+      {profile?.name === "compatibility" && (
+        <Alert>
+          <Info className="h-4 w-4" />
+          <AlertDescription>{profile.blurb}</AlertDescription>
+        </Alert>
+      )}
 
       {/* Engine choice */}
       <Tabs
@@ -173,11 +224,23 @@ export default function StudioPage() {
         </div>
       </div>
 
-      {/* Generate / cancel */}
+      {/* Generate / stop / cancel.
+          During streaming the button is Stop: generation halts but the
+          partial audio is kept (playable + exportable). */}
       <div className="flex items-center gap-3">
         {busy ? (
-          <Button variant="destructive" onClick={tts.cancel} className="flex-1 sm:flex-none sm:px-8">
-            <Square className="mr-2 h-4 w-4" /> Cancel
+          <Button
+            variant={phase === "streaming" ? "secondary" : "destructive"}
+            onClick={tts.cancel}
+            className="flex-1 sm:flex-none sm:px-8"
+            title={
+              phase === "streaming"
+                ? "Stop generating — keeps the audio generated so far"
+                : "Cancel"
+            }
+          >
+            <Square className="mr-2 h-4 w-4" />
+            {phase === "streaming" ? "Stop" : "Cancel"}
           </Button>
         ) : (
           <Button
@@ -193,17 +256,23 @@ export default function StudioPage() {
           <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
         )}
       </div>
+      {phase === "streaming" && (
+        <p className="text-xs text-muted-foreground">
+          Audio plays sentence-by-sentence as it is generated. Small gaps
+          between sentences are normal.
+        </p>
+      )}
 
       {/* Progress */}
       {phase === "loading-model" && (
         <div className="space-y-2">
-          <Progress value={loadProgress * 100} />
+          <Progress value={(loadProgress ?? 0) * 100} />
           {statusLine && (
             <p className="text-sm text-muted-foreground">{statusLine}</p>
           )}
         </div>
       )}
-      {phase === "synthesizing" && (
+      {(phase === "synthesizing" || phase === "streaming") && (
         <div className="space-y-2">
           {synthProgress && synthProgress.total > 1 && (
             <Progress value={(synthProgress.done / synthProgress.total) * 100} />
@@ -228,7 +297,8 @@ export default function StudioPage() {
       )}
 
       {/* Result */}
-      {engineChoice === "kokoro" && phase === "ready" && <AudioPlayer />}
+      {engineChoice === "kokoro" &&
+        (phase === "ready" || phase === "ready-partial") && <AudioPlayer />}
       {engineChoice === "system" && phase === "ready" && (
         <Alert>
           <ShieldCheck className="h-4 w-4" />

@@ -9,6 +9,8 @@ import {
   parseWavHeader,
   peakAmplitude,
 } from "@/audio/wav-encoder";
+import { concatChunks } from "@/audio/concat";
+import { getProfile, type DeviceProfileName } from "@/lib/device-profile";
 
 declare global {
   interface Window {
@@ -41,22 +43,99 @@ export default function VerifyRunner() {
       // ?assets=1 → use the same-origin verification mirror (see
       // app/api/verify-assets). Production never sets this.
       const assetBase = params.get("assets") === "1" ? "/api/verify-assets" : undefined;
+      // ?stream=1 → exercise the streaming protocol (synthesizeStream) and
+      // the streamed-vs-batch byte-match regression. ?profile=… selects the
+      // device profile's chunk/thread policy for the run.
+      const streamMode = params.get("stream") === "1";
+      const profileName = (params.get("profile") || "balanced") as DeviceProfileName;
+      const profile = getProfile(profileName) ?? getProfile("balanced");
+      const ortOpts = {
+        numThreads: profile.ortThreads > 0 ? profile.ortThreads : undefined,
+        // In the harness the mirror always wins (sandbox blocks the CDN);
+        // sameOriginWasm only applies to real production loads.
+        sameOriginWasm: false,
+      };
       const t0 = performance.now();
       try {
         const mgr = getEngineManager();
         setStatus("loading model…");
         const device = await mgr.loadModel((f) => {
           if (!cancelled) setStatus(`loading model… ${Math.round(f * 100)}%`);
-        }, assetBase ? { assetBase } : {});
+        }, assetBase ? { assetBase, ...ortOpts } : ortOpts);
         const t1 = performance.now();
-        if (!cancelled) setStatus("synthesizing…");
-        const result = await mgr.synthesize(text, voice, speed, {
-          onProgress: (d, t) => {
-            if (!cancelled) setStatus(`synthesizing… chunk ${d}/${t}`);
-          },
-        });
+        if (!cancelled) setStatus(streamMode ? "streaming…" : "synthesizing…");
+
+        let samples: Float32Array;
+        let sampleRate: number;
+        let chunkCount: number;
+        let firstChunkMs: number | null = null;
+        let pcmByteMatch: boolean | null = null;
+        let streamMs = 0;
+
+        if (streamMode) {
+          // (a) Profile-chunked streaming run: time-to-first-chunk. Every
+          // chunk is acked immediately (no playback in the harness).
+          const parts: Float32Array[] = [];
+          const tS = performance.now();
+          const sp = mgr.synthesizeStream(
+            text,
+            voice,
+            speed,
+            {
+              onChunk: (c) => {
+                if (firstChunkMs === null) firstChunkMs = performance.now() - tS;
+                parts[c.index] = c.samples;
+                sp.ack();
+                if (!cancelled) setStatus(`streaming… chunk ${c.index + 1}/${c.total}`);
+              },
+              onProgress: (d, t) => {
+                if (!cancelled) setStatus(`streaming… chunk ${d}/${t}`);
+              },
+            },
+            { chunkChars: profile.chunkChars, highWater: profile.streamHighWater },
+          );
+          const sres = await sp;
+          streamMs = performance.now() - tS;
+          sampleRate = sres.sampleRate;
+          chunkCount = sres.chunkCount;
+          samples = concatChunks(parts, { sampleRate });
+          // (b) Byte-match control: stream and batch with IDENTICAL chunking
+          // (400 chars, the batch default) — regression: the streaming
+          // transport (transfers, ordering, concat) must not change audio.
+          if (!cancelled) setStatus("streaming… byte-match control");
+          const parts400: Float32Array[] = [];
+          const sp2 = mgr.synthesizeStream(
+            text,
+            voice,
+            speed,
+            {
+              onChunk: (c) => {
+                parts400[c.index] = c.samples;
+                sp2.ack();
+              },
+            },
+            { chunkChars: 400, highWater: 4 },
+          );
+          await sp2;
+          const batch = await mgr.synthesize(text, voice, speed);
+          const streamed400 = concatChunks(parts400, { sampleRate });
+          pcmByteMatch =
+            batch.samples.length === streamed400.length &&
+            batch.sampleRate === sampleRate &&
+            batch.samples.every((v, i) => v === streamed400[i]);
+        } else {
+          const result = await mgr.synthesize(text, voice, speed, {
+            onProgress: (d, t) => {
+              if (!cancelled) setStatus(`synthesizing… chunk ${d}/${t}`);
+            },
+          });
+          const t2 = performance.now();
+          samples = result.samples;
+          sampleRate = result.sampleRate;
+          chunkCount = result.chunkCount;
+          streamMs = Math.round(t2 - t1);
+        }
         const t2 = performance.now();
-        const { samples, sampleRate, chunkCount } = result;
         // Byte-level proof: encode a real WAV in-page and re-parse its header.
         const wav = encodeWav(samples, { sampleRate });
         const wavHeader = parseWavHeader(wav);
@@ -75,6 +154,11 @@ export default function VerifyRunner() {
           synthMs: Math.round(t2 - t1),
           wavBytes: wav.length,
           wavHeader,
+          streamMode,
+          profile: profile.name,
+          firstChunkMs: firstChunkMs === null ? null : Math.round(firstChunkMs),
+          streamMs: Math.round(streamMs),
+          pcmByteMatch,
           // base64 for independent Node-side validation + evidence file
           wavBase64: uint8ToBase64(wav),
         };

@@ -6,37 +6,95 @@
  * Owns the EngineManager singleton (Kokoro worker), the SystemEngine fallback,
  * voice lists, generation lifecycle, and preview-audio caching. Pages and
  * components consume this context — nobody talks to engines directly.
+ *
+ * Streaming: Kokoro generation runs through `synthesizeStream`. Each chunk's
+ * PCM is retained (for WAV/MP3 export via concat on demand), wrapped in a
+ * per-chunk WAV blob URL, and played sequentially through two ping-ponging
+ * <audio> elements (the iOS-privileged playback path — no AudioContext).
+ * While chunk i plays, chunk i+1 is preloaded on the idle element. Blob URLs
+ * are revoked after `ended`; each consumed chunk is acked back to the worker
+ * (backpressure). Small inter-chunk gaps are inherent to sequential <audio>
+ * playback and are documented, not hidden.
  */
 import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
   type ReactNode,
 } from "react";
-import { getEngineManager } from "@/lib/engine-manager";
+import { getEngineManager, type StreamChunk, type StreamPromise } from "@/lib/engine-manager";
 import { SystemEngine } from "@/engines/system/system-engine";
 import type { Voice } from "@/engines/engine-interface";
 import { validateTextInput } from "@/lib/text-chunk";
 import { encodeWav } from "@/audio/wav-encoder";
+import { concatChunks } from "@/audio/concat";
+import { StreamQueue } from "@/lib/stream-queue";
+import { createThrottledProgress } from "@/lib/throttle";
+import {
+  classifyDevice,
+  defaultEngineFor,
+  type DeviceProfile,
+} from "@/lib/device-profile";
+import {
+  clearGenerateFlag,
+  consumeStaleGenerateFlag,
+  markGenerateStart,
+} from "@/lib/jetsam-sentinel";
 import { DEFAULT_VOICE_ID } from "@/engines/kokoro/voices";
 
-export type EngineChoice = "kokoro" | "system";
-export type Phase = "idle" | "loading-model" | "synthesizing" | "ready" | "error";
+/**
+ * EngineChoice mirrors Track A's EngineId ("kokoro" | "system" | "kitten").
+ * "kitten" is accepted at the type level per the device-profile contract,
+ * but engines/kitten is not wired into this provider yet (Track A owns
+ * that) — see the TEMPORARY coercion in the mount effect below.
+ */
+export type EngineChoice = "kokoro" | "system" | "kitten";
+export type Phase =
+  | "idle"
+  | "loading-model"
+  | "synthesizing"
+  | "streaming"
+  | "ready"
+  | "ready-partial"
+  | "error";
 
 export const MAX_CHARS = 5000;
 const PREVIEW_TEXT = (name: string) => `Hello, I'm ${name}. This is how I sound.`;
 
+interface QueuedChunk {
+  index: number;
+  url: string;
+  samples: Float32Array;
+}
+
+interface StreamState {
+  stream: StreamPromise;
+  queue: StreamQueue<QueuedChunk>;
+  pcmParts: Float32Array[];
+  sampleRate: number;
+  els: [HTMLAudioElement, HTMLAudioElement];
+  activeEl: 0 | 1;
+  playing: boolean;
+  synthDone: boolean;
+  currentChunk: QueuedChunk | null;
+  userStopped: boolean;
+}
+
 interface TTSContextValue {
   engineChoice: EngineChoice;
   setEngineChoice: (e: EngineChoice) => void;
+  /** Device profile (Track A ladder) — null until classified. */
+  profile: DeviceProfile | null;
 
   // Kokoro engine state
   kokoroLoaded: boolean;
   kokoroLoading: boolean;
-  loadProgress: number; // 0..1
+  /** 0..1, or null when no real progress event has arrived yet ("Preparing…"). */
+  loadProgress: number | null;
   device: string | null; // "webgpu" | "wasm"
   voices: Voice[];
   voicesLoading: boolean;
@@ -64,6 +122,8 @@ interface TTSContextValue {
   ensureVoices: () => Promise<void>;
   /** Unload the model from memory and delete all cached model files. */
   unloadModel: () => Promise<void>;
+  /** True when a previous tab died mid-generate (one-time; consumed on read). */
+  wasInterrupted: () => boolean;
 }
 
 const TTSContext = createContext<TTSContextValue | null>(null);
@@ -76,9 +136,10 @@ export function useTTS(): TTSContextValue {
 
 export function TTSProvider({ children }: { children: ReactNode }) {
   const [engineChoice, setEngineChoiceState] = useState<EngineChoice>("kokoro");
+  const [profile, setProfile] = useState<DeviceProfile | null>(null);
   const [kokoroLoaded, setKokoroLoaded] = useState(false);
   const [kokoroLoading, setKokoroLoading] = useState(false);
-  const [loadProgress, setLoadProgress] = useState(0);
+  const [loadProgress, setLoadProgress] = useState<number | null>(null);
   const [device, setDevice] = useState<string | null>(null);
   const [voices, setVoices] = useState<Voice[]>([]);
   const [voicesLoading, setVoicesLoading] = useState(false);
@@ -98,6 +159,14 @@ export function TTSProvider({ children }: { children: ReactNode }) {
   const audioDataRef = useRef<{ samples: Float32Array; sampleRate: number } | null>(null);
   const engineChoiceRef = useRef<EngineChoice>("kokoro");
   engineChoiceRef.current = engineChoice;
+  const phaseRef = useRef<Phase>("idle");
+  phaseRef.current = phase;
+  const kokoroLoadedRef = useRef(false);
+  const voicesRef = useRef<Voice[]>([]);
+  voicesRef.current = voices;
+  const profileRef = useRef<DeviceProfile | null>(null);
+  const engineTouchedRef = useRef(false);
+  const streamRef = useRef<StreamState | null>(null);
 
   const fail = useCallback((message: string) => {
     setError(message);
@@ -114,7 +183,7 @@ export function TTSProvider({ children }: { children: ReactNode }) {
   // ---- voice loading ------------------------------------------------------
 
   const ensureKokoroVoices = useCallback(async () => {
-    if (voices.length > 0 || voicesLoading) return;
+    if (voicesRef.current.length > 0 || voicesLoading) return;
     setVoicesLoading(true);
     try {
       // Static registry — no model download.
@@ -125,7 +194,7 @@ export function TTSProvider({ children }: { children: ReactNode }) {
     } finally {
       setVoicesLoading(false);
     }
-  }, [voices.length, voicesLoading, fail]);
+  }, [voicesLoading, fail]);
 
   const ensureSystemVoices = useCallback(async () => {
     if (!systemEngineRef.current) systemEngineRef.current = new SystemEngine();
@@ -139,14 +208,29 @@ export function TTSProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // ---- engine switching ----------------------------------------------------
+  // ---- device profile → default engine (Track A ladder) --------------------
 
-  const setEngineChoice = useCallback(
-    (e: EngineChoice) => {
-      // Cancel anything in flight when switching engines.
+  const applyEngineChoice = useCallback(
+    (e: EngineChoice, userInitiated: boolean) => {
+      if (userInitiated) engineTouchedRef.current = true;
+      // Tear down any streaming playback when switching engines.
+      const s = streamRef.current;
+      streamRef.current = null;
+      if (s) {
+        for (const el of s.els) {
+          try { el.pause(); } catch { /* ignore */ }
+          el.onended = null;
+          el.onerror = null;
+          el.removeAttribute("src");
+        }
+        if (s.currentChunk) URL.revokeObjectURL(s.currentChunk.url);
+        for (const c of s.queue.clear()) URL.revokeObjectURL(c.url);
+      }
       getEngineManager().cancel();
       systemEngineRef.current?.unload().catch(() => undefined);
+      clearGenerateFlag();
       setEngineChoiceState(e);
+      engineChoiceRef.current = e;
       setPhase("idle");
       setError(null);
       setSynthProgress(null);
@@ -154,6 +238,189 @@ export function TTSProvider({ children }: { children: ReactNode }) {
       if (e === "system") void ensureSystemVoices();
     },
     [ensureKokoroVoices, ensureSystemVoices],
+  );
+
+  // Classify once on mount; the ladder sets the DEFAULT engine only — a
+  // manual user choice is never overridden.
+  useEffect(() => {
+    let cancelled = false;
+    void classifyDevice().then((p) => {
+      if (cancelled) return;
+      profileRef.current = p;
+      setProfile(p);
+      if (!engineTouchedRef.current) {
+        const ladderDefault = defaultEngineFor(p);
+        // TEMPORARY (Track B): the ladder can now return "kitten"
+        // (balanced-mobile), but engines/kitten is not wired into this
+        // provider yet — coercing to kokoro (today's behavior on those
+        // devices) instead of defaulting to a dead engine. Track A: remove
+        // this coercion when the kitten engine lands.
+        applyEngineChoice(ladderDefault === "kitten" ? "kokoro" : ladderDefault, false);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [applyEngineChoice]);
+
+  const setEngineChoice = useCallback(
+    (e: EngineChoice) => applyEngineChoice(e, true),
+    [applyEngineChoice],
+  );
+
+  // ---- streaming plumbing --------------------------------------------------
+
+  /** Build the combined WAV blob URL from retained chunk PCM (export/replay). */
+  const buildStreamAudioUrl = useCallback((s: StreamState) => {
+    const combined = concatChunks(s.pcmParts, { sampleRate: s.sampleRate });
+    audioDataRef.current = { samples: combined, sampleRate: s.sampleRate };
+    const wav = encodeWav(combined, { sampleRate: s.sampleRate });
+    const blob = new Blob([wav as unknown as BlobPart], { type: "audio/wav" });
+    setAudioUrl((old) => {
+      if (old) URL.revokeObjectURL(old);
+      return URL.createObjectURL(blob);
+    });
+    setAudioSampleRate(s.sampleRate);
+  }, []);
+
+  /** All chunks received AND the queue drained: generation is fully done. */
+  const finishStreamReady = useCallback((s: StreamState) => {
+    if (streamRef.current !== s) return;
+    streamRef.current = null;
+    setPhase("ready");
+    setSynthProgress(null);
+    clearGenerateFlag();
+  }, []);
+
+  /**
+   * Stop: halt generation, silence playback, revoke queued chunk URLs
+   * (acking each), but KEEP the retained PCM — the partial audio is
+   * playable and exportable (phase `ready-partial`).
+   */
+  const finishStreamPartial = useCallback(
+    (s: StreamState) => {
+      if (streamRef.current === s) streamRef.current = null;
+      for (const el of s.els) {
+        try { el.pause(); } catch { /* ignore */ }
+        el.onended = null;
+        el.onerror = null;
+        el.removeAttribute("src");
+        el.load();
+      }
+      if (s.currentChunk) {
+        URL.revokeObjectURL(s.currentChunk.url);
+        s.stream.ack();
+        s.currentChunk = null;
+      }
+      for (const c of s.queue.clear()) {
+        URL.revokeObjectURL(c.url);
+        s.stream.ack();
+      }
+      s.playing = false;
+      if (s.pcmParts.length > 0) {
+        buildStreamAudioUrl(s);
+        // Keep N-of-M so the UI can say "Stopped — partial audio (N of M)".
+        setPhase("ready-partial");
+      } else {
+        setSynthProgress(null);
+        setPhase("idle");
+      }
+      clearGenerateFlag();
+    },
+    [buildStreamAudioUrl],
+  );
+
+  /** Drop stream state without keeping audio (superseded / engine switch). */
+  const teardownStream = useCallback(() => {
+    const s = streamRef.current;
+    streamRef.current = null;
+    if (!s) return;
+    for (const el of s.els) {
+      try { el.pause(); } catch { /* ignore */ }
+      el.onended = null;
+      el.onerror = null;
+      el.removeAttribute("src");
+    }
+    if (s.currentChunk) URL.revokeObjectURL(s.currentChunk.url);
+    for (const c of s.queue.clear()) URL.revokeObjectURL(c.url);
+    // No acks: the job is dead; the worker ignores chunk-ack for dead jobs.
+  }, []);
+
+  /** Advance sequential chunk playback (ping-pong <audio> elements). */
+  const pumpStream = useCallback(() => {
+    const s = streamRef.current;
+    if (!s || s.playing || s.userStopped) return;
+    const next = s.queue.shift();
+    if (!next) {
+      if (s.synthDone) finishStreamReady(s);
+      return;
+    }
+    s.playing = true;
+    s.currentChunk = next;
+    const el = s.els[s.activeEl];
+    el.onended = null;
+    el.onerror = null;
+    el.src = next.url;
+    el.preload = "auto";
+    // Preload the following chunk on the idle element while this one plays.
+    const upcoming = s.queue.peek();
+    const idle = s.els[1 - s.activeEl];
+    if (upcoming) {
+      idle.src = upcoming.url;
+      idle.preload = "auto";
+      idle.load();
+    } else {
+      idle.removeAttribute("src");
+    }
+    const consume = () => {
+      URL.revokeObjectURL(next.url);
+      s.stream.ack();
+      s.playing = false;
+      s.currentChunk = null;
+      s.activeEl = (1 - s.activeEl) as 0 | 1;
+      pumpStream();
+    };
+    el.onended = consume;
+    el.onerror = consume; // a bad chunk must not stall the queue
+    el.play().catch(() => {
+      // Playback blocked (autoplay policy): keep the partial audio instead
+      // of losing it — the user can press Play on what was generated.
+      s.userStopped = true;
+      finishStreamPartial(s);
+    });
+  }, [finishStreamReady, finishStreamPartial]);
+
+  const handleStreamChunk = useCallback(
+    (s: StreamState, chunk: StreamChunk) => {
+      // Retain PCM for export even if we never play this chunk.
+      s.pcmParts.push(chunk.samples);
+      s.sampleRate = chunk.sampleRate;
+      const wav = encodeWav(chunk.samples, { sampleRate: chunk.sampleRate });
+      const url = URL.createObjectURL(
+        new Blob([wav as unknown as BlobPart], { type: "audio/wav" }),
+      );
+      if (s.userStopped || streamRef.current !== s) {
+        // Late chunk after Stop/teardown: keep PCM, ack immediately.
+        URL.revokeObjectURL(url);
+        s.stream.ack();
+        return;
+      }
+      const rec: QueuedChunk = { index: chunk.index, url, samples: chunk.samples };
+      if (!s.queue.push(rec)) {
+        // Unreachable in practice: the worker pauses at the high-water mark.
+        // If it ever happens, drop backpressure (ack now) rather than grow
+        // memory without bound.
+        URL.revokeObjectURL(url);
+        s.stream.ack();
+        return;
+      }
+      if (phaseRef.current === "synthesizing") {
+        // First audio is here: time-to-first-audio = time-to-first-chunk.
+        setPhase("streaming");
+      }
+      pumpStream();
+    },
+    [pumpStream],
   );
 
   // ---- generation ----------------------------------------------------------
@@ -166,6 +433,8 @@ export function TTSProvider({ children }: { children: ReactNode }) {
         return;
       }
       dismissError();
+      markGenerateStart();
+      teardownStream();
 
       if (engineChoiceRef.current === "system") {
         // Tier-0 fallback: speak directly, no downloadable audio.
@@ -177,72 +446,165 @@ export function TTSProvider({ children }: { children: ReactNode }) {
         } catch (e) {
           if (e instanceof DOMException && e.name === "AbortError") setPhase("idle");
           else fail(e instanceof Error ? e.message : String(e));
+        } finally {
+          clearGenerateFlag();
         }
         return;
       }
 
-      // Kokoro path (worker).
+      if (engineChoiceRef.current === "kitten") {
+        // engines/kitten is not wired into this provider yet (Track A owns
+        // it). Fail honestly instead of silently running the wrong engine.
+        // (Unreachable via the UI today — no kitten tab exists yet.)
+        fail(
+          "KittenTTS Nano isn't connected in this build yet — " +
+            "Kokoro or system voices work now.",
+        );
+        clearGenerateFlag();
+        return;
+      }
+
+      // Kokoro path (worker, streaming).
       const mgr = getEngineManager();
+      const profile =
+        profileRef.current ?? (await classifyDevice().catch(() => null));
+      if (profile) {
+        profileRef.current = profile;
+        setProfile(profile);
+      }
+      const p = profileRef.current;
+      const chunkChars = p?.chunkChars ?? 400;
+      const highWater = p?.streamHighWater ?? 3;
+      // Throttle load-progress state: ~250ms / >=1% — ends the render storm
+      // during the model download. Real percentages only; loadProgress stays
+      // null ("Preparing…") until the first real event — no fake seed.
+      const throttledLoad = createThrottledProgress((f) => setLoadProgress(f));
+
       try {
-        if (!kokoroLoaded) {
+        if (!kokoroLoadedRef.current) {
           setPhase("loading-model");
           setKokoroLoading(true);
-          const dev = await mgr.loadModel(setLoadProgress);
+          setLoadProgress(null);
+          const dev = await mgr.loadModel(throttledLoad, {
+            numThreads:
+              p && p.ortThreads > 0 ? p.ortThreads : undefined,
+            sameOriginWasm: p?.ortWasmBase === "same-origin",
+          });
           setDevice(dev);
           setKokoroLoaded(true);
+          kokoroLoadedRef.current = true;
           setKokoroLoading(false);
-          if (voices.length === 0) setVoices(await mgr.getVoices());
+          if (voicesRef.current.length === 0) setVoices(await mgr.getVoices());
         }
+        // No fake {done: 0, total: 1} seed — real synth-progress fills it.
         setPhase("synthesizing");
-        setSynthProgress({ done: 0, total: 1 });
-        const result = await mgr.synthesize(text, voiceId, speed, {
-          onProgress: (done, total) => setSynthProgress({ done, total }),
-        });
-        audioDataRef.current = {
-          samples: result.samples,
-          sampleRate: result.sampleRate,
+        setSynthProgress(null);
+
+        const s: StreamState = {
+          stream: null as unknown as StreamPromise,
+          queue: new StreamQueue<QueuedChunk>(highWater),
+          pcmParts: [],
+          sampleRate: 24000,
+          els: [new Audio(), new Audio()],
+          activeEl: 0,
+          playing: false,
+          synthDone: false,
+          currentChunk: null,
+          userStopped: false,
         };
-        const wav = encodeWav(result.samples, { sampleRate: result.sampleRate });
-        const blob = new Blob([wav as unknown as BlobPart], { type: "audio/wav" });
-        setAudioUrl((old) => {
-          if (old) URL.revokeObjectURL(old);
-          return URL.createObjectURL(blob);
-        });
-        setAudioSampleRate(result.sampleRate);
-        setPhase("ready");
+        const stream = mgr.synthesizeStream(
+          text,
+          voiceId,
+          speed,
+          {
+            onChunk: (chunk) => handleStreamChunk(s, chunk),
+            onProgress: (done, total) => setSynthProgress({ done, total }),
+          },
+          { chunkChars, highWater },
+        );
+        s.stream = stream;
+        streamRef.current = s;
+
+        const result = await stream;
+        // All chunks received. The queue drains naturally (phase stays
+        // "streaming" with "Playing… finishing up"); the combined WAV is
+        // built now so replay/download are ready the moment it drains.
+        s.synthDone = true;
+        s.sampleRate = result.sampleRate;
+        buildStreamAudioUrl(s);
+        pumpStream();
       } catch (e) {
+        const s = streamRef.current;
         if (e instanceof DOMException && e.name === "AbortError") {
-          setPhase("idle");
-          setKokoroLoading(false);
+          if (s?.userStopped) {
+            // Stop during streaming: keep the partial audio.
+            finishStreamPartial(s);
+          } else {
+            teardownStream();
+            setPhase("idle");
+            setKokoroLoading(false);
+            setSynthProgress(null);
+          }
         } else {
+          teardownStream();
           fail(
             e instanceof Error
               ? `Speech generation failed: ${e.message}`
               : "Speech generation failed.",
           );
         }
-      } finally {
-        setSynthProgress(null);
+        clearGenerateFlag();
       }
     },
-    [kokoroLoaded, voices.length, fail, dismissError],
+    [
+      fail,
+      dismissError,
+      teardownStream,
+      handleStreamChunk,
+      pumpStream,
+      buildStreamAudioUrl,
+      finishStreamPartial,
+    ],
   );
 
   const cancel = useCallback(() => {
+    const s = streamRef.current;
+    if (s && phaseRef.current === "streaming") {
+      // Stop (not Cancel): halt generation, keep the partial audio.
+      // Playback silences now; the AbortError handler finalizes to
+      // ready-partial with everything generated so far.
+      s.userStopped = true;
+      for (const el of s.els) {
+        try { el.pause(); } catch { /* ignore */ }
+      }
+      s.stream.cancel();
+      return;
+    }
     getEngineManager().cancel();
+    teardownStream();
     systemEngineRef.current?.unload().catch(() => undefined);
+    clearGenerateFlag();
     setPhase("idle");
     setSynthProgress(null);
     setKokoroLoading(false);
-  }, []);
+  }, [teardownStream]);
 
-  const getAudioData = useCallback(
-    () => audioDataRef.current,
-    [],
-  );
+  const getAudioData = useCallback(() => {
+    if (audioDataRef.current) return audioDataRef.current;
+    // Partial (or unfinalized) stream: concat retained chunks on demand.
+    const s = streamRef.current;
+    if (s && s.pcmParts.length > 0) {
+      const combined = concatChunks(s.pcmParts, { sampleRate: s.sampleRate });
+      return { samples: combined, sampleRate: s.sampleRate };
+    }
+    return null;
+  }, []);
 
   const unloadModel = useCallback(async () => {
     getEngineManager().cancel();
+    teardownStream();
+    // Worker terminate+recreate is the memory reset: the ORT WASM heap is
+    // process-global and engine.unload() cannot free it.
     await getEngineManager().unloadModel().catch(() => undefined);
     const { deleteModelCaches } = await import("@/lib/model-store");
     await deleteModelCaches();
@@ -253,12 +615,14 @@ export function TTSProvider({ children }: { children: ReactNode }) {
     });
     setAudioSampleRate(null);
     setKokoroLoaded(false);
+    kokoroLoadedRef.current = false;
     setDevice(null);
-    setLoadProgress(0);
+    setLoadProgress(null);
     setPhase("idle");
+    clearGenerateFlag();
     previewCacheRef.current.forEach((url) => URL.revokeObjectURL(url));
     previewCacheRef.current.clear();
-  }, []);
+  }, [teardownStream]);
 
   // ---- voice preview (real short synthesis, cached) -------------------------
 
@@ -286,10 +650,16 @@ export function TTSProvider({ children }: { children: ReactNode }) {
           );
         } else {
           const mgr = getEngineManager();
-          if (!kokoroLoaded) {
-            const dev = await mgr.loadModel(setLoadProgress);
+          const p = profileRef.current;
+          const throttledLoad = createThrottledProgress((f) => setLoadProgress(f));
+          if (!kokoroLoadedRef.current) {
+            const dev = await mgr.loadModel(throttledLoad, {
+              numThreads: p && p.ortThreads > 0 ? p.ortThreads : undefined,
+              sameOriginWasm: p?.ortWasmBase === "same-origin",
+            });
             setDevice(dev);
             setKokoroLoaded(true);
+            kokoroLoadedRef.current = true;
           }
           const result = await mgr.synthesize(PREVIEW_TEXT(voice.name), voice.id, 1);
           const wav = encodeWav(result.samples, { sampleRate: result.sampleRate });
@@ -306,13 +676,16 @@ export function TTSProvider({ children }: { children: ReactNode }) {
         setPreviewingId(null);
       }
     },
-    [kokoroLoaded],
+    [],
   );
+
+  const wasInterrupted = useCallback(() => consumeStaleGenerateFlag(), []);
 
   const value = useMemo<TTSContextValue>(
     () => ({
       engineChoice,
       setEngineChoice,
+      profile,
       kokoroLoaded,
       kokoroLoading,
       loadProgress,
@@ -334,13 +707,14 @@ export function TTSProvider({ children }: { children: ReactNode }) {
       getAudioData,
       ensureVoices: ensureKokoroVoices,
       unloadModel,
+      wasInterrupted,
     }),
     [
-      engineChoice, setEngineChoice, kokoroLoaded, kokoroLoading, loadProgress,
-      device, voices, voicesLoading, systemAvailable, systemVoices, phase,
-      synthProgress, audioUrl, audioSampleRate, error, generate, cancel,
-      previewVoice, previewingId, dismissError, getAudioData, ensureKokoroVoices,
-      unloadModel,
+      engineChoice, setEngineChoice, profile, kokoroLoaded, kokoroLoading,
+      loadProgress, device, voices, voicesLoading, systemAvailable,
+      systemVoices, phase, synthProgress, audioUrl, audioSampleRate, error,
+      generate, cancel, previewVoice, previewingId, dismissError,
+      getAudioData, ensureKokoroVoices, unloadModel, wasInterrupted,
     ],
   );
 
