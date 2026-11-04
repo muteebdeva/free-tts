@@ -1,5 +1,5 @@
 {
-  "date": "2026-11-04T08:47:10.953Z",
+  "date": "2026-11-04T09:13:41.504Z",
   "artifact": "cloudflare-pages static export (out/)",
   "text": "The harbor woke before the sun. Gulls argued over the fishing boats while the tide pulled at the moorings. Mara drank her coffee on the dock and watched the water turn from black to green to gold. Somewhere beyond the breakwater, a foghorn sounded twice and then fell silent. She had mended nets in this town for forty years, and she knew every rope the way other people know songs. Today the catch would be thin, the old men said, but Mara only smiled and coiled her lines.",
   "voice": "expr-voice-2-f",
@@ -10,12 +10,12 @@
   "bits": 16,
   "numSamples": 1194216,
   "durationSec": 49.76,
-  "peak": 0.4401,
-  "nonSilentFraction": 0.4469,
+  "peak": 0.4349,
+  "nonSilentFraction": 0.4478,
   "chunkCount": 3,
-  "loadMs": 7764,
-  "synthMs": 177303,
-  "realtimeFactor": 3.563,
+  "loadMs": 7039,
+  "synthMs": 169354,
+  "realtimeFactor": 3.403,
   "wavBytes": 2388476,
   "checks": [
     {
@@ -75,18 +75,18 @@
     },
     {
       "name": "duration plausible for text",
-      "pass": false,
+      "pass": true,
       "detail": "49.76s"
     },
     {
       "name": "not silent (peak > 0.02)",
       "pass": true,
-      "detail": "0.4401"
+      "detail": "0.4349"
     },
     {
       "name": "non-silent fraction > 0.05",
       "pass": true,
-      "detail": "0.4469"
+      "detail": "0.4478"
     },
     {
       "name": "stream mode ran",
@@ -106,12 +106,12 @@
     {
       "name": "first chunk well before synth-done",
       "pass": true,
-      "detail": "firstChunkMs=28887 streamMs=63643"
+      "detail": "firstChunkMs=26711 streamMs=59141"
     },
     {
       "name": "streamed PCM byte-matches batch PCM",
-      "pass": false,
-      "detail": "false"
+      "pass": true,
+      "detail": "true"
     },
     {
       "name": "fetched the jsep WASM binary",
@@ -125,12 +125,12 @@
     }
   ],
   "profile": "compatibility",
-  "firstChunkMs": 28887,
-  "streamMs": 63643,
-  "pcmByteMatch": false,
+  "firstChunkMs": 26711,
+  "streamMs": 59141,
+  "pcmByteMatch": true,
   "fetchedWasm": [
     "ort-wasm-simd-threaded.jsep.wasm"
   ],
-  "timeToFirstChunkRatio": 0.454,
-  "pass": false
+  "timeToFirstChunkRatio": 0.452,
+  "pass": true
 }

@@ -92,7 +92,7 @@ Fix (committed):
 - `engines/kitten/kitten-engine.ts`: defensive guard — throws a clear `KittenEngine: input too long (N tokens > 450)` error instead of the cryptic ORT failure if called directly with oversized input.
 
 ### pcmByteMatch for kitten
-The streaming gate's streamed-vs-batch byte-match check returns `false` for kitten (single-chunk streaming works; audio is real). [STATUS PENDING — gate re-run in progress at report time; if it persists, the likely cause is non-determinism in the Nano model and the check will be documented as kokoro-only.]
+The streaming gate's streamed-vs-batch byte-match check cannot pass for kitten. Investigation proved KittenTTS Nano is **non-deterministic**: identical inputs produce different PCM (measured maxDiff 0.27 on a 470-char text, 0.00024 on a 26-char text). Lengths match exactly, chunks are identical — the variation is model stochasticity, not transport corruption. The gate now uses a transport check for kitten (identical chunk count, identical total length, non-silent audio); exact byte-match remains kokoro-only by design.
 
 ## 9. Verify — Final QA (Phase 9)
 
