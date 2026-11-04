@@ -110,7 +110,10 @@ export function AudioPlayer() {
     setMp3Busy(true);
     try {
       // Dynamic import: the encoder module is provided by audio/mp3-export.
+      // The encoder bundle (/lame.min.js) loads on demand here — no global
+      // script tag on the page.
       const mod = await import("@/audio/mp3-export");
+      await mod.ensureLamejs();
       const bytes = mod.encodeMp3(data.samples, data.sampleRate, 128);
       const url = URL.createObjectURL(
         new Blob([bytes as unknown as BlobPart], { type: "audio/mpeg" }),

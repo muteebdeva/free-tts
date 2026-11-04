@@ -12,13 +12,12 @@
  * the `MPEGMode` global that only exists when the sources are concatenated).
  * The supported artifact is the concatenated bundle `lame.all.js` /
  * `lame.min.js`, which defines a `lamejs` global when loaded as a plain
- * `<script>`. Before calling `encodeMp3` in the browser, load that bundle so
- * `globalThis.lamejs` exists, e.g. copy `node_modules/lamejs/lame.min.js`
- * into `public/` and add `<script src="/lame.min.js" defer></script>`
- * (or `next/script`). This module resolves the encoder from
- * `globalThis.lamejs` at call time and throws a clear error if the bundle
- * was not loaded. The vitest suite evaluates the bundle into `globalThis`
- * the same way a `<script>` tag would.
+ * `<script>`. Call `ensureLamejs()` before `encodeMp3` in the browser: it
+ * injects `/lame.min.js` (served from `public/`) on demand and resolves once
+ * the `globalThis.lamejs` global is ready, so no page pays for the ~130 KB
+ * bundle unless the user actually exports an MP3. The vitest suite evaluates
+ * the bundle into `globalThis` the same way a `<script>` tag would, so
+ * `ensureLamejs()` resolves immediately there.
  *
  * Caveats (verified against lamejs 1.2.1):
  * - 24000 Hz is accepted and encoded as MPEG-2 Layer III (legal MP3 rate).
@@ -53,16 +52,68 @@ const MIN_KBPS = 8;
 const MAX_KBPS = 320;
 const DEFAULT_KBPS = 128;
 
-/** Resolve the lamejs namespace the host page (or test) must provide. */
+/** Resolve the lamejs namespace (loaded on demand via `ensureLamejs`). */
 function getLamejs(): LamejsNamespace {
   const ns = (globalThis as unknown as { lamejs?: LamejsNamespace }).lamejs;
   if (!ns || typeof ns.Mp3Encoder !== "function") {
     throw new Error(
       "encodeMp3: the lamejs bundle is not loaded — " +
-        "include lame.min.js as a <script> so globalThis.lamejs exists before encoding",
+        "call ensureLamejs() first so the /lame.min.js script is injected and ready",
     );
   }
   return ns;
+}
+
+/** In-flight script-injection promise (singleton; reset on failure). */
+let lameLoadPromise: Promise<void> | null = null;
+
+/**
+ * Ensure the lamejs encoder bundle is available in the browser.
+ *
+ * Resolves immediately when `globalThis.lamejs` already exists. Otherwise
+ * injects `<script src="/lame.min.js">` once (the bundle lives in `public/`)
+ * and resolves when it loads. Rejects with a clear error when the script
+ * fails to load, the global is still missing after load, or there is no DOM
+ * (e.g. SSR/Node without the global pre-evaluated). Safe to call repeatedly;
+ * concurrent callers share the same load.
+ */
+export async function ensureLamejs(): Promise<void> {
+  if (getLamejsNamespace()) return;
+  if (typeof document === "undefined" || typeof window === "undefined") {
+    throw new Error(
+      "ensureLamejs: no DOM — inject /lame.min.js yourself so globalThis.lamejs exists",
+    );
+  }
+  if (!lameLoadPromise) {
+    lameLoadPromise = new Promise<void>((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "/lame.min.js";
+      script.async = true;
+      script.onload = () => {
+        if (getLamejsNamespace()) resolve();
+        else
+          reject(
+            new Error(
+              "ensureLamejs: /lame.min.js loaded but the lamejs global is missing",
+            ),
+          );
+      };
+      script.onerror = () =>
+        reject(new Error("ensureLamejs: failed to load /lame.min.js"));
+      document.head.appendChild(script);
+    });
+    // Allow a later retry after a failed load.
+    lameLoadPromise.catch(() => {
+      lameLoadPromise = null;
+    });
+  }
+  return lameLoadPromise;
+}
+
+/** Non-throwing read of the lamejs global (null when not loaded). */
+function getLamejsNamespace(): LamejsNamespace | null {
+  const ns = (globalThis as unknown as { lamejs?: LamejsNamespace }).lamejs;
+  return ns && typeof ns.Mp3Encoder === "function" ? ns : null;
 }
 
 /**

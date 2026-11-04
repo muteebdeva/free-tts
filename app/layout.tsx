@@ -45,10 +45,6 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
-        {/* lamejs MP3 encoder bundle (global `lamejs`); loaded for the
-            Studio's MP3 download. Pure-JS LAME port — runs fully client-side.
-            See audio/mp3-export.ts. */}
-        <script src="/lame.min.js" defer />
       </head>
       <body className="flex min-h-full flex-col bg-background text-foreground">
         <ThemeProvider>
