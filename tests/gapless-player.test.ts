@@ -1,5 +1,10 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { GaplessPlayer, GAPLESS_CROSSFADE_SEC } from "../audio/gapless-player";
+import {
+  GaplessPlayer,
+  GAPLESS_CROSSFADE_SEC,
+  promoteAudioSession,
+  resetSessionPromotionForTests,
+} from "../audio/gapless-player";
 
 /** Minimal Web Audio mock that records scheduling calls. */
 interface MockSource {
@@ -241,5 +246,141 @@ describe("GaplessPlayer", () => {
     p.playChunk(tone(24000), 24000);
     expect(p.timeline).toHaveLength(0);
     expect(ctx.close).toHaveBeenCalled();
+  });
+});
+
+describe("iOS audio session promotion + unlock verification", () => {
+  let win: Record<string, unknown>;
+  let playedUrls: string[];
+  beforeEach(() => {
+    win = {};
+    (globalThis as unknown as { window: unknown }).window = win;
+    win.addEventListener = vi.fn();
+    win.removeEventListener = vi.fn();
+    playedUrls = [];
+    resetSessionPromotionForTests();
+    // navigator without audioSession => legacy <audio> kick path.
+    vi.stubGlobal("navigator", {});
+    const TestAudio = vi.fn(function (this: unknown, url: string) {
+      playedUrls.push(url);
+      return {
+        play: vi.fn(async () => undefined),
+      };
+    });
+    vi.stubGlobal("Audio", TestAudio);
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn(() => "blob:mock-silent"),
+      revokeObjectURL: vi.fn(),
+    });
+  });
+  afterEach(() => {
+    delete (globalThis as unknown as { window?: unknown }).window;
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("promoteAudioSession sets navigator.audioSession.type to playback (iOS 17+)", () => {
+    const audioSession: { type?: string } = {};
+    vi.stubGlobal("navigator", { audioSession });
+    promoteAudioSession();
+    expect(audioSession.type).toBe("playback");
+  });
+
+  it("promoteAudioSession plays a silent <audio> kick for older iOS", () => {
+    promoteAudioSession();
+    // One silent WAV blob URL was played through an <audio> element.
+    expect(playedUrls).toEqual(["blob:mock-silent"]);
+  });
+
+  it("promoteAudioSession runs only once per page load", () => {
+    promoteAudioSession();
+    promoteAudioSession();
+    expect(playedUrls).toHaveLength(1);
+  });
+
+  it("unlock() promotes the audio session synchronously in the gesture", () => {
+    const audioSession: { type?: string } = {};
+    vi.stubGlobal("navigator", { audioSession });
+    const { ctx } = makeMockContext();
+    win.AudioContext = vi.fn(function (this: unknown) { return ctx; });
+    const p = new GaplessPlayer();
+    expect(p.unlock()).toBe(true);
+    // Whisper-quiet regression: without this, iOS routes Web Audio through
+    // the silent-switch-muted ambient channel.
+    expect(audioSession.type).toBe("playback");
+    p.dispose();
+  });
+
+  it("ensureUnlocked resolves true when the context is running", async () => {
+    const { ctx } = makeMockContext(); // state: "running"
+    win.AudioContext = vi.fn(function (this: unknown) { return ctx; });
+    const p = new GaplessPlayer();
+    p.unlock();
+    await expect(p.ensureUnlocked()).resolves.toBe(true);
+    p.dispose();
+  });
+
+  it("ensureUnlocked resolves false when iOS keeps the context suspended", async () => {
+    const { ctx } = makeMockContext();
+    ctx.state = "suspended";
+    // resume() that iOS ignores: state never changes.
+    ctx.resume = vi.fn(async () => undefined);
+    win.AudioContext = vi.fn(function (this: unknown) { return ctx; });
+    const p = new GaplessPlayer();
+    // unlock() is optimistic (context exists) — the silence regression.
+    expect(p.unlock()).toBe(true);
+    // ...but verification catches it: the caller must use the <audio>
+    // fallback instead of scheduling into a suspended context.
+    await expect(p.ensureUnlocked()).resolves.toBe(false);
+    p.dispose();
+  });
+
+  it("ensureUnlocked resolves true when a retried resume unlocks iOS", async () => {
+    const { ctx } = makeMockContext();
+    ctx.state = "suspended";
+    ctx.resume = vi.fn(async () => {
+      ctx.state = "running";
+    });
+    win.AudioContext = vi.fn(function (this: unknown) { return ctx; });
+    const p = new GaplessPlayer();
+    p.unlock();
+    await expect(p.ensureUnlocked()).resolves.toBe(true);
+    p.dispose();
+  });
+
+  it("unlock() on an existing context retries resume (does not blindly succeed)", () => {
+    const { ctx } = makeMockContext();
+    ctx.state = "suspended";
+    ctx.resume = vi.fn(async () => undefined);
+    win.AudioContext = vi.fn(function (this: unknown) { return ctx; });
+    const p = new GaplessPlayer();
+    p.unlock();
+    const callsAfterFirst = (ctx.resume as ReturnType<typeof vi.fn>).mock.calls.length;
+    p.unlock();
+    // Second unlock re-kicks resume instead of returning early.
+    expect((ctx.resume as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(
+      callsAfterFirst,
+    );
+    p.dispose();
+  });
+
+  it("no chunk gain is ever stuck below 1.0 outside its crossfade (whisper regression)", () => {
+    const { ctx, gains } = makeMockContext();
+    win.AudioContext = vi.fn(function (this: unknown) { return ctx; });
+    const p = new GaplessPlayer();
+    p.unlock();
+    // gains[0] is the master — it must never be automated (stays 1.0).
+    p.playChunk(tone(24000), 24000);
+    p.playChunk(tone(24000), 24000);
+    p.playChunk(tone(24000), 24000);
+    const master = gains[0].gain;
+    expect(master.setValueAtTimeCalls).toHaveLength(0);
+    expect(master.curveCalls).toHaveLength(0);
+    // Per-chunk gains: the last automation on the still-playing (final)
+    // chunk must leave it at 1.0 — a stuck low gain is the whisper bug.
+    const lastGain = gains[3].gain;
+    const lastCurve = lastGain.curveCalls.at(-1)!;
+    expect(lastCurve.curve.at(-1)!).toBeCloseTo(1, 3);
+    p.dispose();
   });
 });

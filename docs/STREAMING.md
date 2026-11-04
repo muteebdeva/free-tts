@@ -58,6 +58,28 @@ inside the Generate button's tap gesture (`TTSProvider.generate`) — iOS
 Safari will not unlock it if creation is deferred. A one-time `pointerdown`
 backup re-resumes if the first attempt raced.
 
+**iOS audio session (whisper-quiet fix, 2026-11-04).** iOS routes Web Audio
+through the "ambient" session (muted by the silent switch) while `<audio>`
+elements use the "playback" session (ignores the switch) — hence "loud on
+the old path, whisper-quiet on Web Audio" with correct gains throughout.
+`unlock()` now promotes the session in the gesture: `navigator.audioSession`
+`.type = "playback"` (iOS 17+) plus a one-time silent-`<audio>` kick (older
+iOS). Verified by unit test (session type set, kick played once).
+
+**Unlock verification.** `unlock()` returning true only means "a context
+exists" — iOS may still keep it suspended. `generate()` now awaits
+`player.ensureUnlocked()` before committing to the Web Audio path; false
+falls back to the legacy `<audio>` path (audible; the stream still
+completes, so the download is built). Scheduling into a suspended context
+is never attempted: besides silence, the chunk-end callbacks would never
+fire and the backpressure acks would stall the stream.
+
+**Audio-blocked UX.** If the context still isn't running ~2 s after the
+first schedule (gapless path), or the legacy path's first `play()` is
+refused, an "Audio is blocked — tap to enable sound" banner appears with a
+tap-to-retry button (`unblockAudio`), which re-kicks resume/play inside the
+tap gesture iOS requires. Never silent failure without explanation.
+
 **Fallback.** If Web Audio is unavailable (`unlock()` false), the legacy
 ping-pong `<audio>` path is used: per-chunk WAV blob URLs played
 sequentially with preload of the next chunk. It has small inter-chunk gaps

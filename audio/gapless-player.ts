@@ -19,12 +19,66 @@
  *
  * iOS: the AudioContext MUST be created and resumed inside the user's tap
  * gesture — unlock() is called synchronously from the Generate button's
- * click handler. A one-time pointerdown backup re-resumes if the first
- * attempt raced. If Web Audio is unavailable, unlock() returns false and
- * the caller falls back to the legacy <audio> ping-pong path (gaps, but
- * audible) — never silence.
+ * click handler. unlock() also promotes the page's audio session to the
+ * "playback" category (navigator.audioSession + a silent <audio> kick):
+ * without this, iOS routes Web Audio through the silent-switch-muted
+ * "ambient" channel — the classic whisper-quiet-iPhone symptom. Callers
+ * must await ensureUnlocked() after unlock(): a context iOS kept suspended
+ * would schedule silence (and stall the stream's backpressure acks), so a
+ * false result means "use the legacy <audio> ping-pong fallback", which is
+ * gaps-but-audible — never silence.
  */
 import { trimSilence } from "./concat";
+import { encodeWav } from "./wav-encoder";
+
+/**
+ * Promote the page's audio session to the "playback" category.
+ *
+ * iOS routes Web Audio API output through the "ambient" audio session,
+ * which the hardware silent switch mutes — while <audio> elements use the
+ * "playback" session, which ignores the switch. That split is exactly the
+ * "loud on the old <audio> path, whisper-quiet on Web Audio" symptom:
+ * the context runs, the gains are correct, but iOS attenuates/mutes the
+ * ambient channel.
+ *
+ * Two mechanisms, both must run inside a user gesture:
+ *  1. iOS 17+ (Safari 17+): the official API — one line.
+ *  2. Older iOS: playing even a silent <audio> element flips the session
+ *     to "playback" for the whole page (the well-known unmute trick).
+ * One-time per page load; harmless everywhere else.
+ */
+let sessionPromoted = false;
+export function promoteAudioSession(): void {
+  if (sessionPromoted) return;
+  sessionPromoted = true;
+  try {
+    const nav = navigator as unknown as {
+      audioSession?: { type?: string };
+    };
+    if (nav.audioSession) nav.audioSession.type = "playback";
+  } catch {
+    /* not supported — the <audio> kick below covers older iOS */
+  }
+  try {
+    // 0.1 s of digital silence; its only job is the session flip.
+    const wav = encodeWav(new Float32Array(2400), { sampleRate: 24000 });
+    const url = URL.createObjectURL(
+      new Blob([wav as unknown as BlobPart], { type: "audio/wav" }),
+    );
+    const el = new Audio(url);
+    const done = () => URL.revokeObjectURL(url);
+    // play() in the gesture is allowed; failure just means the kick
+    // didn't happen — the Web Audio path is unaffected.
+    void el.play().then(done, done);
+  } catch {
+    /* ignore — best effort */
+  }
+}
+
+/** Test hook: allow the promotion to run again. */
+export function resetSessionPromotionForTests(): void {
+  sessionPromoted = false;
+}
 
 export interface GaplessPlayerEvents {
   /** A scheduled chunk finished playing (the backpressure ack point). */
@@ -98,9 +152,24 @@ export class GaplessPlayer {
    * Synchronous gesture-time init. MUST be called inside the user tap that
    * starts generation (iOS will not unlock the AudioContext otherwise).
    * Returns false when Web Audio is unavailable — use the fallback path.
+   *
+   * NOTE: returning true means "a context exists", NOT "audio is audible".
+   * iOS may keep the context suspended even after a gesture-time resume, and
+   * (separately) may route it through the silent-switch-muted ambient
+   * channel. Callers must await ensureUnlocked() before committing to this
+   * path; the session promotion below handles the ambient-channel case.
    */
   unlock(): boolean {
-    if (this.ctx) return true;
+    // Session promotion FIRST: without it, iOS plays Web Audio on the
+    // "ambient" channel (silent-switch-muted) — the whisper-quiet symptom.
+    promoteAudioSession();
+    if (this.ctx) {
+      // Already created (e.g. a retried generate): a raced gesture may have
+      // left it suspended — retry the resume instead of blindly reporting
+      // success. The caller still verifies via ensureUnlocked().
+      void this.ctx.resume().catch(() => undefined);
+      return true;
+    }
     try {
       const AC =
         window.AudioContext ??
@@ -123,6 +192,31 @@ export class GaplessPlayer {
       this.master = null;
       return false;
     }
+  }
+
+  /**
+   * Await the gesture-time resume and report whether the context is really
+   * running. MUST be awaited after unlock() before the caller commits to
+   * the Web Audio path: scheduling into a suspended context is silence,
+   * and (worse) the chunk-end callbacks never fire, so the worker's
+   * backpressure acks stall and the stream never completes — no audio AND
+   * no download. Resolving false means "use the <audio> fallback".
+   */
+  async ensureUnlocked(): Promise<boolean> {
+    const ctx = this.ctx;
+    if (!ctx) return false;
+    if (ctx.state === "running") return true;
+    try {
+      // A second resume covers the iOS quirk where the first gesture-time
+      // resume is ignored.
+      await ctx.resume();
+    } catch {
+      return false;
+    }
+    // Read fresh: the state may have changed while resuming (TS narrows the
+    // earlier check away, so go through a plain string).
+    const state: string = ctx.state;
+    return state === "running";
   }
 
   /** True when the context exists and is running (audio is audible). */

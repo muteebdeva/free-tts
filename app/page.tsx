@@ -9,6 +9,7 @@ import {
   Loader2,
   ShieldCheck,
   Square,
+  Volume2,
   Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -40,6 +41,7 @@ export default function StudioPage() {
     voices, kittenVoices, systemVoices,
     phase, synthProgress, loadProgress, kokoroLoading, kittenLoading, device,
     error, dismissError, ensureVoices, profile, wasInterrupted,
+    audioBlocked, unblockAudio,
   } = tts;
 
   const [text, setText] = useState("");
@@ -313,6 +315,22 @@ export default function StudioPage() {
             <span>{error}</span>
             <Button variant="outline" size="sm" onClick={dismissError}>
               Dismiss
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* Audio blocked — tap-to-retry (iOS may refuse audio outside a tap) */}
+      {audioBlocked && !error && (
+        <Alert>
+          <Volume2 className="h-4 w-4" />
+          <AlertDescription className="flex items-center justify-between gap-4">
+            <span>
+              Audio is blocked — your browser wouldn&apos;t start sound. Also
+              check your silent switch: iPhones mute web audio when it&apos;s on.
+            </span>
+            <Button variant="default" size="sm" onClick={unblockAudio}>
+              Tap to enable sound
             </Button>
           </AlertDescription>
         </Alert>

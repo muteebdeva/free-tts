@@ -132,6 +132,14 @@ interface TTSContextValue {
   previewVoice: (voice: Voice, engine: EngineChoice) => Promise<void>;
   previewingId: string | null;
   dismissError: () => void;
+  /**
+   * True when audio output appears blocked (Web Audio would not run and the
+   * <audio> fallback's play() was refused). The UI shows a "tap to enable
+   * sound" banner with the unblockAudio retry action.
+   */
+  audioBlocked: boolean;
+  /** Retry audio output from a user tap (see audioBlocked). */
+  unblockAudio: () => void;
   /** Raw PCM of the last generation (for MP3 export). Null for system voices. */
   getAudioData: () => { samples: Float32Array; sampleRate: number } | null;
   /** Load the voice list (static metadata — does NOT download the model). */
@@ -171,6 +179,13 @@ export function TTSProvider({ children }: { children: ReactNode }) {
   const [audioSampleRate, setAudioSampleRate] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [previewingId, setPreviewingId] = useState<string | null>(null);
+  /**
+   * True when audio output appears blocked after generation started: the
+   * Web Audio context would not run and the <audio> fallback's play() was
+   * also refused. Shows a "tap to enable sound" banner instead of leaving
+   * the user with silence and no explanation.
+   */
+  const [audioBlocked, setAudioBlocked] = useState(false);
 
   const systemEngineRef = useRef<SystemEngine | null>(null);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -442,6 +457,9 @@ export function TTSProvider({ children }: { children: ReactNode }) {
     el.play().catch(() => {
       // Playback blocked (autoplay policy): keep the partial audio instead
       // of losing it — the user can press Play on what was generated.
+      // If this was the very first play attempt, say so with the
+      // tap-to-retry banner instead of silent failure.
+      if (phaseRef.current === "synthesizing") setAudioBlocked(true);
       s.userStopped = true;
       finishStreamPartial(s);
     });
@@ -460,7 +478,26 @@ export function TTSProvider({ children }: { children: ReactNode }) {
       if (s.gapless) {
         // Gapless Web Audio path: schedule back-to-back with precise start
         // times. The player's onChunkEnded fires the ack per played chunk.
-        s.gapless.playChunk(chunk.samples, chunk.sampleRate);
+        const player = s.gapless;
+        const isFirstSchedule =
+          player.timeline.length === 0 && player.trimmedLengths.length === 0;
+        player.playChunk(chunk.samples, chunk.sampleRate);
+        if (isFirstSchedule && !player.running) {
+          // Scheduled into a context that isn't running (iOS suspended it
+          // after our checks, e.g. an interruption). If it doesn't recover
+          // promptly, say so with a tap-to-retry button — never silent
+          // failure without explanation.
+          window.setTimeout(() => {
+            if (
+              streamRef.current === s &&
+              s.gapless === player &&
+              !player.running &&
+              !s.userStopped
+            ) {
+              setAudioBlocked(true);
+            }
+          }, 2000);
+        }
         if (phaseRef.current === "synthesizing") {
           // First audio is here: time-to-first-audio = time-to-first-chunk.
           setPhase("streaming");
@@ -660,18 +697,27 @@ export function TTSProvider({ children }: { children: ReactNode }) {
         return;
       }
       dismissError();
+      setAudioBlocked(false);
       markGenerateStart();
       teardownStream();
 
       // Gapless playback needs the AudioContext created AND resumed
       // synchronously inside this tap gesture — iOS Safari will not unlock
-      // it if creation is deferred past the click handler. unlock() false
-      // => the legacy <audio> ping-pong path (gaps, but audible).
+      // it if creation is deferred past the click handler. unlock() also
+      // promotes the audio session to "playback" (else iOS plays Web Audio
+      // on the silent-switch-muted ambient channel = whisper-quiet).
+      // unlock() true only means "a context exists": await ensureUnlocked()
+      // to confirm the resume took effect. False => the legacy <audio>
+      // ping-pong path (gaps, but audible — never silence, and the stream
+      // still completes so the download is built).
       let gapless: GaplessPlayer | null = null;
       if (engineChoiceRef.current !== "system") {
         const candidate = new GaplessPlayer();
-        if (candidate.unlock()) gapless = candidate;
-        else candidate.dispose();
+        if (candidate.unlock() && (await candidate.ensureUnlocked())) {
+          gapless = candidate;
+        } else {
+          candidate.dispose();
+        }
       }
 
       if (engineChoiceRef.current === "system") {
@@ -736,6 +782,26 @@ export function TTSProvider({ children }: { children: ReactNode }) {
     setKokoroLoading(false);
     setKittenLoading(false);
   }, [teardownStream]);
+
+  /**
+   * Tap-to-retry for the "audio blocked" banner. Runs in the user's tap
+   * gesture, so iOS allows resume()/play() here — a retry that the
+   * automatic paths could not perform outside a gesture.
+   */
+  const unblockAudio = useCallback(() => {
+    setAudioBlocked(false);
+    const s = streamRef.current;
+    if (!s || s.userStopped) return;
+    if (s.gapless) {
+      // Retry the unlock synchronously in this gesture (session promotion
+      // is one-time; this re-kicks resume on the existing context).
+      s.gapless.unlock();
+      s.gapless.ensureRunning();
+    } else {
+      // Legacy path: re-kick the pump; play() in this gesture is allowed.
+      pumpStream();
+    }
+  }, [pumpStream]);
 
   const getAudioData = useCallback(() => {
     if (audioDataRef.current) return audioDataRef.current;
@@ -864,6 +930,8 @@ export function TTSProvider({ children }: { children: ReactNode }) {
       previewVoice,
       previewingId,
       dismissError,
+      audioBlocked,
+      unblockAudio,
       getAudioData,
       ensureVoices: ensureKokoroVoices,
       unloadModel,
@@ -875,6 +943,7 @@ export function TTSProvider({ children }: { children: ReactNode }) {
       loadProgress, device, voices, voicesLoading, systemAvailable,
       systemVoices, phase, synthProgress, audioUrl, audioSampleRate, error,
       generate, cancel, previewVoice, previewingId, dismissError,
+      audioBlocked, unblockAudio,
       getAudioData, ensureKokoroVoices, unloadModel, wasInterrupted,
     ],
   );
