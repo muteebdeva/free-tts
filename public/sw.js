@@ -16,9 +16,22 @@
  *  - Navigations               -> network first, fall back to cached "/" offline
  *  - /_next/static/** + same-origin assets -> stale-while-revalidate
  *  - Everything else            -> network first, cache fallback on failure
+ *  - activate                  -> evict only old "freets-shell-*" caches; the
+ *    model/voice caches (transformers-cache, kokoro-voices) are preserved
  */
 const CACHE = "freets-shell-v1";
 const SHELL = ["/", "/manifest.webmanifest", "/icons/icon.svg"];
+
+/**
+ * Model/voice caches must NEVER be evicted here. Deleting them would silently
+ * force a full multi-minute model re-download on every SW update — previously
+ * the activate handler wiped every cache except the shell cache, which was
+ * the real cache-wipe bug. Source of truth for these names:
+ * lib/model-store.ts (MODEL_CACHES).
+ */
+const PRESERVED_CACHES = ["transformers-cache", "kokoro-voices"];
+/** Only old versions of this worker's own shell cache are evicted on activate. */
+const SHELL_PREFIX = "freets-shell-";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -35,7 +48,14 @@ self.addEventListener("activate", (event) => {
       .keys()
       .then((keys) =>
         Promise.all(
-          keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)),
+          keys
+            .filter(
+              (k) =>
+                k.startsWith(SHELL_PREFIX) &&
+                k !== CACHE &&
+                !PRESERVED_CACHES.includes(k),
+            )
+            .map((k) => caches.delete(k)),
         ),
       )
       .then(() => self.clients.claim()),
