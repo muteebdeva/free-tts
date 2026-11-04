@@ -1,19 +1,19 @@
 {
-  "date": "2026-11-04T09:48:58.968Z",
+  "date": "2026-11-04T10:08:42.936Z",
   "text": "The harbor woke before the sun. Gulls argued over the fishing boats while the tide pulled at the moorings. Mara drank her coffee on the dock and watched the water turn from black to green to gold. Somewhere beyond the breakwater, a foghorn sounded twice and then fell silent. She had mended nets in this town for forty years, and she knew every rope the way other people know songs. The gulls settled as the sun cleared the point and the water went flat. Mara turned the boat toward home, the engine humming low under her feet.",
   "voice": "expr-voice-2-f",
   "engine": "kitten",
-  "numSamples": 1335894,
+  "numSamples": 1335816,
   "durationSec": 55.66,
-  "peak": 0.359,
+  "peak": 0.3699,
   "chunkCount": 3,
   "trimmedLengths": [
     493000,
     488200,
-    355078
+    355000
   ],
   "worstJointScheduleErrMs": 0,
-  "worstJointSilenceMs": 9.9,
+  "worstJointSilenceMs": 9.1,
   "audioRunningHeadless": true,
   "checks": [
     {
@@ -49,7 +49,7 @@
     {
       "name": "not silent (peak > 0.02)",
       "pass": true,
-      "detail": "0.3590"
+      "detail": "0.3699"
     },
     {
       "name": "timeline covers every chunk",
@@ -69,12 +69,12 @@
     {
       "name": "no ≥50 ms near-zero run within ±50 ms of any joint",
       "pass": true,
-      "detail": "worst 9.9 ms at joint 2"
+      "detail": "worst 9.1 ms at joint 2"
     },
     {
       "name": "stitched sample count matches trim+crossfade transform exactly",
       "pass": true,
-      "detail": "1335894 vs 1335894 (raw chunk sum 1336278, trimmed 384 samples incl. 384 crossfade)"
+      "detail": "1335816 vs 1335816 (raw chunk sum 1336200, trimmed 384 samples incl. 384 crossfade)"
     }
   ],
   "pass": true
