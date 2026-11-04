@@ -14,10 +14,7 @@
  *  - `isIOSDevice(userAgent, maxTouchPoints)` / `isMobileDevice(userAgent)` —
  *    PURE UA helpers (also used by engines/kokoro for the iOS 26 force-WASM
  *    rule).
- *  - `defaultEngineFor(profile): EngineId` — ladder default. EngineId now
- *    includes "kitten" (Track B: EngineChoice/applyEngineChoice must accept
- *    it — capable-Android devices now default to the KittenTTS Nano neural
- *    engine instead of system voices).
+ *  - `defaultEngineFor(profile): EngineId` — ladder default.
  *  - `PROFILES` / `getProfile(name)` — the per-profile parameter table
  *    (chunkChars, streamHighWater, ORT thread policy, WASM binary policy).
  *    Shape unchanged from the interim version.
@@ -28,14 +25,14 @@
  * Profiles (per docs/PROPOSED-ARCHITECTURE.md §(a) and §(c)):
  *  PERFORMANCE   desktop + working WebGPU adapter → kokoro fp32 default
  *  BALANCED      desktop CPU / capable Android      → kokoro q8 default
- *                (mobile: kitten nano default — the gated opt-up, graduated
- *                after the real-audio gate passed; see docs/KITTEN-SPIKE.md)
+ *                (mobile: system voices default — the KittenTTS Nano phone
+ *                engine was removed at the user's request on 2026-11-04)
  *  COMPATIBILITY iOS (any version), low-memory      → system voices default;
- *                neural engines stay available as opt-ins
+ *                Kokoro stays available as an opt-in
  */
 
 export type DeviceProfileName = "performance" | "balanced" | "compatibility";
-export type EngineId = "kokoro" | "system" | "kitten";
+export type EngineId = "kokoro" | "system";
 
 /** Device/dtype policy injected into KokoroEngine (from the profile). */
 export interface KokoroDevicePolicy {
@@ -63,7 +60,7 @@ export interface DeviceProfile {
   ortWasmBase: "default" | "same-origin";
   /** Device/dtype policy for KokoroEngine — injected, not self-detected. */
   kokoroPolicy: KokoroDevicePolicy;
-  /** True for phones/tablets (Android/iOS); drives the kitten-mobile default. */
+  /** True for phones/tablets (Android/iOS); drives the mobile default. */
   isMobile: boolean;
   defaultEngine: EngineId;
   /** Honest one-liner shown in the Studio for this profile. */
@@ -175,8 +172,7 @@ export const PROFILES: Record<DeviceProfileName, DeviceProfile> = {
     blurb:
       "This device is on the compatibility path: system voices are the default " +
       "because neural synthesis needs a download and runs slower than real " +
-      "time here. KittenTTS Nano and Kokoro stay available as opt-ins — " +
-      "no hidden downgrade.",
+      "time here. Kokoro stays available as an opt-in — no hidden downgrade.",
   },
 };
 
@@ -188,15 +184,14 @@ export function getProfile(name: DeviceProfileName): DeviceProfile {
  * The ladder default for a profile.
  *  - performance → kokoro (WebGPU fp32, the quality king)
  *  - balanced + desktop → kokoro (q8 on CPU — current behavior)
- *  - balanced + mobile → kitten (KittenTTS Nano: 27 MB vs Kokoro's 92 MB,
- *    measured ~2.1× slower than real-time on CPU — the best neural default
- *    for a phone; graduated from "opt-in only" after the real-audio gate
- *    passed — docs/KITTEN-SPIKE.md)
+ *  - balanced + mobile → system (phones: instant, zero download; the
+ *    KittenTTS Nano phone engine was removed at the user's request on
+ *    2026-11-04 — see docs/KITTEN-SPIKE.md)
  *  - compatibility → system (iOS / low-memory: instant, zero download)
  */
 export function defaultEngineFor(profile: DeviceProfile): EngineId {
   if (profile.name === "performance") return "kokoro";
-  if (profile.name === "balanced") return profile.isMobile ? "kitten" : "kokoro";
+  if (profile.name === "balanced") return profile.isMobile ? "system" : "kokoro";
   return "system";
 }
 

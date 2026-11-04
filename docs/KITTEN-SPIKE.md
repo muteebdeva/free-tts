@@ -1,6 +1,12 @@
-# KittenTTS Nano spike — verdict: SHIP
+# KittenTTS Nano spike — verdict: SHIP, then REMOVED
 
-**Date:** 2026-11-04 · **Status:** all three ship-blockers PASS — integrated as `engines/kitten/`.
+> **REMOVED at the user's request on 2026-11-04** ("Remove kitten I don't
+> want this model"). The engine shipped, passed every gate below, and was
+> then deleted from the codebase — engine code, worker registry, UI tab,
+> tests, and verify scripts are gone. This document and
+> `docs/evidence/kitten-verify.{wav,json}` remain as the historical record.
+
+**Date:** 2026-11-04 · **Status:** all three ship-blockers PASS — integrated as `engines/kitten/` (later removed, see above).
 
 Time-boxed evaluation of KittenTTS Nano as the light neural opt-up for the
 device ladder (PROPOSED-ARCHITECTURE.md §(a)). Every claim below was measured,

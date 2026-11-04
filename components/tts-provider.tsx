@@ -49,12 +49,12 @@ import {
 import { DEFAULT_VOICE_ID } from "@/engines/kokoro/voices";
 
 /**
- * EngineChoice mirrors Track A's EngineId ("kokoro" | "system" | "kitten").
- * "kitten" is accepted at the type level per the device-profile contract,
- * but engines/kitten is not wired into this provider yet (Track A owns
- * that) — see the TEMPORARY coercion in the mount effect below.
+ * EngineChoice mirrors Track A's EngineId ("kokoro" | "system").
+ * Kokoro-82M is the neural engine; system voices are the Web Speech API
+ * fallback. (A KittenTTS Nano phone engine existed briefly and was removed
+ * at the user's request on 2026-11-04.)
  */
-export type EngineChoice = "kokoro" | "system" | "kitten";
+export type EngineChoice = "kokoro" | "system";
 export type Phase =
   | "idle"
   | "loading-model"
@@ -105,10 +105,6 @@ interface TTSContextValue {
   // Kokoro engine state
   kokoroLoaded: boolean;
   kokoroLoading: boolean;
-  // KittenTTS Nano engine state (light neural opt-up for mobile)
-  kittenLoaded: boolean;
-  kittenLoading: boolean;
-  kittenVoices: Voice[];
   /** 0..1, or null when no real progress event has arrived yet ("Preparing…"). */
   loadProgress: number | null;
   device: string | null; // "webgpu" | "wasm"
@@ -163,15 +159,12 @@ export function TTSProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<DeviceProfile | null>(null);
   const [kokoroLoaded, setKokoroLoaded] = useState(false);
   const [kokoroLoading, setKokoroLoading] = useState(false);
-  const [kittenLoaded, setKittenLoaded] = useState(false);
-  const [kittenLoading, setKittenLoading] = useState(false);
   const [loadProgress, setLoadProgress] = useState<number | null>(null);
   const [device, setDevice] = useState<string | null>(null);
   const [voices, setVoices] = useState<Voice[]>([]);
   const [voicesLoading, setVoicesLoading] = useState(false);
   const [systemVoices, setSystemVoices] = useState<Voice[]>([]);
   const [systemAvailable, setSystemAvailable] = useState(false);
-  const [kittenVoices, setKittenVoices] = useState<Voice[]>([]);
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [synthProgress, setSynthProgress] = useState<{ done: number; total: number } | null>(null);
@@ -196,11 +189,8 @@ export function TTSProvider({ children }: { children: ReactNode }) {
   const phaseRef = useRef<Phase>("idle");
   phaseRef.current = phase;
   const kokoroLoadedRef = useRef(false);
-  const kittenLoadedRef = useRef(false);
   const voicesRef = useRef<Voice[]>([]);
   voicesRef.current = voices;
-  const kittenVoicesRef = useRef<Voice[]>([]);
-  kittenVoicesRef.current = kittenVoices;
   const profileRef = useRef<DeviceProfile | null>(null);
   const engineTouchedRef = useRef(false);
   const streamRef = useRef<StreamState | null>(null);
@@ -209,7 +199,6 @@ export function TTSProvider({ children }: { children: ReactNode }) {
     setError(message);
     setPhase("error");
     setKokoroLoading(false);
-    setKittenLoading(false);
     setSynthProgress(null);
   }, []);
 
@@ -227,20 +216,6 @@ export function TTSProvider({ children }: { children: ReactNode }) {
       // Static registry — no model download.
       const mgr = getEngineManager();
       setVoices(await mgr.getVoices());
-    } catch (e) {
-      fail(e instanceof Error ? e.message : String(e));
-    } finally {
-      setVoicesLoading(false);
-    }
-  }, [voicesLoading, fail]);
-
-  const ensureKittenVoices = useCallback(async () => {
-    if (kittenVoicesRef.current.length > 0 || voicesLoading) return;
-    setVoicesLoading(true);
-    try {
-      // Static registry — no model download.
-      const mgr = getEngineManager();
-      setKittenVoices(await mgr.getVoices("kitten"));
     } catch (e) {
       fail(e instanceof Error ? e.message : String(e));
     } finally {
@@ -292,10 +267,9 @@ export function TTSProvider({ children }: { children: ReactNode }) {
       setError(null);
       setSynthProgress(null);
       if (e === "kokoro") void ensureKokoroVoices();
-      if (e === "kitten") void ensureKittenVoices();
       if (e === "system") void ensureSystemVoices();
     },
-    [ensureKokoroVoices, ensureKittenVoices, ensureSystemVoices],
+    [ensureKokoroVoices, ensureSystemVoices],
   );
 
   // Classify once on mount; the ladder sets the DEFAULT engine only — a
@@ -528,35 +502,26 @@ export function TTSProvider({ children }: { children: ReactNode }) {
 
   // ---- generation ----------------------------------------------------------
 
-  // ---- neural engines (kokoro | kitten): shared streaming generation --------
+  // ---- neural engine (kokoro): streaming generation ------------------------
 
   const generateNeural = useCallback(
     async (
-      engineId: "kokoro" | "kitten",
       text: string,
       voiceId: string,
       speed: number,
       gapless: GaplessPlayer | null,
     ) => {
-      // Per-engine state slots — one neural engine is active at a time.
-      const slot =
-        engineId === "kokoro"
-          ? {
-              loadedRef: kokoroLoadedRef,
-              setLoaded: setKokoroLoaded,
-              setLoading: setKokoroLoading,
-              voicesRef,
-              setVoices,
-            }
-          : {
-              loadedRef: kittenLoadedRef,
-              setLoaded: setKittenLoaded,
-              setLoading: setKittenLoading,
-              voicesRef: kittenVoicesRef,
-              setVoices: setKittenVoices,
-            };
-      // Neural-engine path (worker, streaming). Shared by Kokoro and KittenTTS Nano.
+      // Kokoro state slot — the only neural engine.
+      const slot = {
+        loadedRef: kokoroLoadedRef,
+        setLoaded: setKokoroLoaded,
+        setLoading: setKokoroLoading,
+        voicesRef,
+        setVoices,
+      };
+      // Neural-engine path (worker, streaming).
       const mgr = getEngineManager();
+      const engineId = "kokoro" as const;
       const profile =
         profileRef.current ?? (await classifyDevice().catch(() => null));
       if (profile) {
@@ -736,13 +701,12 @@ export function TTSProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-            // Neural engines (kokoro | kitten) via the worker, streaming.
+            // Neural engine (kokoro) via the worker, streaming.
       // The gapless player is disposed by the stream lifecycle
       // (teardownStream / finishStreamPartial / finishStreamReady paths);
       // if generateNeural throws before the stream starts, dispose here.
       try {
         return await generateNeural(
-          engineChoiceRef.current === "kitten" ? "kitten" : "kokoro",
           text,
           voiceId,
           speed,
@@ -780,7 +744,6 @@ export function TTSProvider({ children }: { children: ReactNode }) {
     setPhase("idle");
     setSynthProgress(null);
     setKokoroLoading(false);
-    setKittenLoading(false);
   }, [teardownStream]);
 
   /**
@@ -830,8 +793,6 @@ export function TTSProvider({ children }: { children: ReactNode }) {
     setAudioSampleRate(null);
     setKokoroLoaded(false);
     kokoroLoadedRef.current = false;
-    setKittenLoaded(false);
-    kittenLoadedRef.current = false;
     setDevice(null);
     setLoadProgress(null);
     setPhase("idle");
@@ -865,18 +826,14 @@ export function TTSProvider({ children }: { children: ReactNode }) {
             {},
           );
         } else {
-          // Neural engines (kokoro | kitten) via the worker.
-          const nid = engine === "kitten" ? "kitten" : "kokoro";
-          const slot =
-            nid === "kokoro"
-              ? { loadedRef: kokoroLoadedRef, setLoaded: setKokoroLoaded }
-              : { loadedRef: kittenLoadedRef, setLoaded: setKittenLoaded };
+          // Neural engine (kokoro) via the worker.
+          const slot = { loadedRef: kokoroLoadedRef, setLoaded: setKokoroLoaded };
           const mgr = getEngineManager();
           const p = profileRef.current;
           const throttledLoad = createThrottledProgress((f) => setLoadProgress(f));
           if (!slot.loadedRef.current) {
             const dev = await mgr.loadModel(throttledLoad, {
-              engineId: nid,
+              engineId: "kokoro",
               numThreads: p && p.ortThreads > 0 ? p.ortThreads : undefined,
               sameOriginWasm: p?.ortWasmBase === "same-origin",
             });
@@ -884,7 +841,7 @@ export function TTSProvider({ children }: { children: ReactNode }) {
             slot.setLoaded(true);
             slot.loadedRef.current = true;
           }
-          const result = await mgr.synthesize(PREVIEW_TEXT(voice.name), voice.id, 1, {}, nid);
+          const result = await mgr.synthesize(PREVIEW_TEXT(voice.name), voice.id, 1, {}, "kokoro");
           const wav = encodeWav(result.samples, { sampleRate: result.sampleRate });
           const url = URL.createObjectURL(
             new Blob([wav as unknown as BlobPart], { type: "audio/wav" }),
@@ -911,9 +868,6 @@ export function TTSProvider({ children }: { children: ReactNode }) {
       profile,
       kokoroLoaded,
       kokoroLoading,
-      kittenLoaded,
-      kittenLoading,
-      kittenVoices,
       loadProgress,
       device,
       voices,
@@ -939,7 +893,6 @@ export function TTSProvider({ children }: { children: ReactNode }) {
     }),
     [
       engineChoice, setEngineChoice, profile, kokoroLoaded, kokoroLoading,
-      kittenLoaded, kittenLoading, kittenVoices,
       loadProgress, device, voices, voicesLoading, systemAvailable,
       systemVoices, phase, synthProgress, audioUrl, audioSampleRate, error,
       generate, cancel, previewVoice, previewingId, dismissError,

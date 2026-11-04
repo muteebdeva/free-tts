@@ -39,10 +39,17 @@ the dev/Turbopack bundle; the runs also differ in text length.)
   "slower than real time — long texts take a while" and offers instant system
   voices as an alternative. No fake progress, no silent stalls.
 
-## KittenTTS Nano (2026-11-04)
+## KittenTTS Nano (2026-11-04) — REMOVED
 
-**Method:** `scripts/verify-kitten.mjs` (real headless-Chromium run; evidence
-`docs/evidence/kitten-verify.json`). Same VM as above.
+> **Removed at the user's request on 2026-11-04** ("Remove kitten I don't
+> want this model"). The engine, its UI tab, worker registry entries, tests,
+> and verify scripts were removed from the codebase. The numbers below are
+> the historical measured results, kept for the record. Evidence files stay
+> in `docs/evidence/` (kitten-verify.{wav,json}).
+
+**Method:** `scripts/verify-kitten.mjs` (REMOVED with the engine; real
+headless-Chromium run; evidence `docs/evidence/kitten-verify.json`). Same VM
+as above.
 
 | Metric | Value |
 |---|---|

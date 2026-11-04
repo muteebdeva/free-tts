@@ -255,7 +255,7 @@ is designed to accommodate it.
 | **Chatterbox** (Resemble AI, 0.5B, MIT code+weights) | ❌ not a default | Browser-verified (Transformers.js v4, official Resemble demo, voxshot `ChatterboxEngine`) with real zero-shot cloning — but **~1.5 GB download**, **max_new_tokens 256 caps output to ~5–10 s/call**, WebGPU effectively required (CPU ~5.8× slower than realtime per voxshot), every output PerTh-watermarked. Multilingual ONNX exists but is **not confirmed loadable by Transformers.js**. Possible future "clone mode", not v1. |
 | **Phonon 31m-en** (Gradium, Oct 21 2026, Apache 2.0, 64.5 MB, npm `phonon-tts`, Rust→WASM) | ❌ not yet | Strongest newcomer (30–100 ms first audio claimed), but **2 weeks old with zero independent benchmarks** — vendor claims only. Monitor. |
 | **Supertonic 3** (Supertone, 66–99M, 31 languages) | ❌ | Browser-feasible via transformers.js, but **weights are OpenRAIL-M** (use restrictions) — fails the clean-license bar. |
-| **Kitten TTS Nano** (15M, ~24 MB, Apache 2.0, English) | 🔶 possible low-end tier | Browser-feasible (transformers.js), smallest serious option; quality C+. Candidate mobile fallback — not implemented in v1. |
+| **Kitten TTS Nano** (15M, ~24 MB, Apache 2.0, English) | 🔶 possible low-end tier | Browser-feasible (transformers.js), smallest serious option; quality C+. Was implemented as the mobile engine, then **removed at the user's request on 2026-11-04** — see docs/KITTEN-SPIKE.md. |
 | **Parler-TTS** (Apache 2.0, transformers.js ONNX) | ❌ | Mini is ~880M params — impractical for tab download/inference. |
 | **Coqui XTTS-v2** | ❌ | CPML non-commercial license; no browser port. |
 | **F5-TTS** | ❌ | Weights CC-BY-NC-4.0 (non-commercial); ~700 MB. |

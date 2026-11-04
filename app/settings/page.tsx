@@ -90,9 +90,9 @@ export default function SettingsPage() {
             The profile is verified, not guessed: a working WebGPU adapter
             means the full-precision Kokoro model (~326 MB download,
             fastest). Without one, the app defaults to the quantized Kokoro
-            model (~92 MB) or KittenTTS Nano (~27 MB) on the CPU — slower
+            model (~92 MB) on the CPU — slower
             than real time, but fully offline after download. On
-            compatibility devices, system voices are the default.
+            compatibility devices (including phones), system voices are the default.
           </p>
         </CardContent>
       </Card>
@@ -155,9 +155,8 @@ export default function SettingsPage() {
         <CardContent className="space-y-1 text-sm text-muted-foreground">
           <p>FreeTTS v1 — free, local-first AI text-to-speech.</p>
           <p>
-            Engines: Kokoro-82M (Apache-2.0) via kokoro-js, KittenTTS Nano
-            (Apache-2.0) via onnxruntime-web, system voices via the Web
-            Speech API.
+            Engines: Kokoro-82M (Apache-2.0) via kokoro-js, system voices via
+            the Web Speech API.
           </p>
           <p>App license: GPL-3.0-or-later (see THIRD-PARTY-NOTICES.md).</p>
         </CardContent>

@@ -171,10 +171,10 @@ describe("defaultEngineFor", () => {
   it("balanced desktop → kokoro", () => {
     expect(defaultEngineFor(profile("balanced", false))).toBe("kokoro");
   });
-  it("balanced mobile (capable Android) → kitten", () => {
-    // The gated mobile opt-up, graduated after the real-audio gate passed
-    // (docs/KITTEN-SPIKE.md).
-    expect(defaultEngineFor(profile("balanced", true))).toBe("kitten");
+  it("balanced mobile (capable Android) → system", () => {
+    // Phones default to system voices: the KittenTTS Nano phone engine was
+    // removed at the user's request on 2026-11-04.
+    expect(defaultEngineFor(profile("balanced", true))).toBe("system");
   });
   it("compatibility → system (iOS / low-memory)", () => {
     expect(defaultEngineFor(profile("compatibility", false))).toBe("system");
@@ -222,11 +222,11 @@ describe("classifyDevice (async, mocked navigator)", () => {
     expect((await classifyDevice()).name).toBe("balanced");
   });
 
-  it("capable Android without adapter → balanced with kitten default", async () => {
+  it("capable Android without adapter → balanced with system default", async () => {
     mockNavigator({ userAgent: ANDROID_UA });
     const p = await classifyDevice();
     expect(p.name).toBe("balanced");
     expect(p.isMobile).toBe(true);
-    expect(p.defaultEngine).toBe("kitten");
+    expect(p.defaultEngine).toBe("system");
   });
 });

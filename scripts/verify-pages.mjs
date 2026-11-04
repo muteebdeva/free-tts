@@ -16,7 +16,6 @@
  * PASS = the Pages artifact performs real in-browser inference.
  * Usage: node scripts/verify-pages.mjs [--text "..."] [--voice af_heart]
  *        node scripts/verify-pages.mjs --stream [--profile compatibility]
- *        node scripts/verify-pages.mjs --engine kitten [--stream]
  *
  * --stream also asserts the streaming protocol: first chunk-done arrives
  * well before synth-done, streamed PCM byte-matches batch PCM, and the
@@ -50,8 +49,8 @@ const STREAM_TEXT = opt(
 const TEXT = STREAM
   ? STREAM_TEXT
   : opt("--text", "Hello. This is a verification test of the FreeTTS Pages build. Real artificial intelligence is speaking locally, inside your browser.");
-const ENGINE = opt("--engine", "kokoro");
-const VOICE = opt("--voice", ENGINE === "kitten" ? "expr-voice-2-f" : "af_heart");
+const ENGINE = "kokoro";
+const VOICE = opt("--voice", "af_heart");
 
 const CONTENT_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -184,9 +183,8 @@ try {
   const durationSec = numSamples / sampleRate;
   // Stream mode deliberately uses a longer multi-sentence text: scale the
   // plausibility bound with text length instead of the fixed 20 s cap.
-  // KittenTTS Nano speaks slower (~0.11 s/char measured) than Kokoro, so the
-  // plausibility ceiling is engine-aware. Both are generous upper bounds.
-  const secPerChar = ENGINE === "kitten" ? 0.16 : 0.08;
+  // Generous upper bound (Kokoro speaks ~0.08 s/char measured).
+  const secPerChar = 0.08;
   const maxDurationSec = STREAM ? Math.max(20, TEXT.length * secPerChar) : Math.max(20, TEXT.length * secPerChar);
   check("duration plausible for text", durationSec > 1.5 && durationSec < maxDurationSec, durationSec.toFixed(2) + "s");
   let peak = 0, nonSilent = 0;

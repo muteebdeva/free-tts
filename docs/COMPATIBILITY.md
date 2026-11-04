@@ -13,7 +13,7 @@ gates what is offered — the user can always override.
 |---|---|---|---|
 | Performance | desktop + working WebGPU adapter | Kokoro-82M fp32 | webgpu / fp32 |
 | Balanced (desktop) | desktop CPU, no adapter | Kokoro-82M q8 | wasm / q8 |
-| Balanced (mobile) | capable Android (not low-memory) | **KittenTTS Nano** | wasm / q8 (opt-in) |
+| Balanced (mobile) | capable Android (not low-memory) | system voices | — |
 | Compatibility | iOS any version, or deviceMemory ≤ 2 GB | system voices | wasm / q8 / 1-thread / same-origin WASM (opt-in) |
 
 Notes:
@@ -21,9 +21,11 @@ Notes:
   Safari exposes WebGPU, but the onnxruntime WebGPU EP is broken there
   (microsoft/onnxruntime#26827), so WebGPU is force-disabled on iOS in both
   the classifier and `KokoroEngine`.
-- "Capable Android" defaults to KittenTTS Nano (27 MB, measured ~2.1× slower
+- ~~"Capable Android" defaults to KittenTTS Nano (27 MB, measured ~2.1× slower
   than real-time on CPU) instead of Kokoro q8 (92 MB) — the gated mobile
-  opt-up, graduated after the real-audio gate passed (`docs/KITTEN-SPIKE.md`).
+  opt-up, graduated after the real-audio gate passed (`docs/KITTEN-SPIKE.md`).~~
+  **REMOVED 2026-11-04 at the user's request** — phones now default to system
+  voices; Kokoro stays available as the opt-in neural engine.
 - `deviceMemory` absence (iOS, Safari, Firefox) means "unknown", never
   "capable": only an explicit ≤ 2 GB reading forces Compatibility on memory
   grounds.
@@ -36,7 +38,7 @@ Notes:
 | Environment | Status | Evidence |
 |---|---|---|
 | Chromium headless-shell 156, Linux, CPU-only (WASM) | ✅ TESTED | `scripts/verify-audio.mjs` GATE PASSED 2026-11-04; evidence in `docs/evidence/` |
-| Chromium headless, Linux, CPU-only — KittenTTS Nano (WASM) | ✅ TESTED | `scripts/verify-kitten.mjs` GATE PASSED 2026-11-04; evidence `docs/evidence/kitten-verify.{wav,json}` |
+| Chromium headless, Linux, CPU-only — KittenTTS Nano (WASM) | 🗑️ REMOVED 2026-11-04 | Engine removed at the user's request; historical evidence `docs/evidence/kitten-verify.{wav,json}` |
 | Chrome desktop (real, WebGPU) | ❌ UNTESTED | No GPU on this VM; third-party reports (Verso) suggest 4.3× RT, not verified here |
 | Edge desktop | ❌ UNTESTED | Chromium-based; expected to behave like Chrome — not verified |
 | Firefox desktop | ❌ UNTESTED | No WebGPU guarantee; WASM path expected to work — not verified |

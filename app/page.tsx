@@ -38,8 +38,8 @@ export default function StudioPage() {
   const tts = useTTS();
   const {
     engineChoice, setEngineChoice,
-    voices, kittenVoices, systemVoices,
-    phase, synthProgress, loadProgress, kokoroLoading, kittenLoading, device,
+    voices, systemVoices,
+    phase, synthProgress, loadProgress, kokoroLoading, device,
     error, dismissError, ensureVoices, profile, wasInterrupted,
     audioBlocked, unblockAudio,
   } = tts;
@@ -59,8 +59,7 @@ export default function StudioPage() {
     if (wasInterrupted()) setShowSentinel(true);
   }, [wasInterrupted]);
 
-  const voiceList =
-    engineChoice === "kokoro" ? voices : engineChoice === "kitten" ? kittenVoices : systemVoices;
+  const voiceList = engineChoice === "kokoro" ? voices : systemVoices;
 
   // Keep the selected voice valid when the voice list (or engine) changes.
   useEffect(() => {
@@ -78,8 +77,7 @@ export default function StudioPage() {
     phase === "loading-model" ||
     phase === "synthesizing" ||
     phase === "streaming" ||
-    kokoroLoading ||
-    kittenLoading;
+    kokoroLoading;
   const canGenerate = !busy && text.trim().length > 0 && text.length <= MAX_CHARS;
 
   const statusLine = useMemo(() => {
@@ -149,9 +147,8 @@ export default function StudioPage() {
         value={engineChoice}
         onValueChange={(v) => v && onEngineChange(v as EngineChoice)}
       >
-        <TabsList className="grid w-full grid-cols-3">
+        <TabsList className="grid w-full grid-cols-2">
           <TabsTrigger value="kokoro">Kokoro AI voices</TabsTrigger>
-          <TabsTrigger value="kitten">KittenTTS Nano</TabsTrigger>
           <TabsTrigger value="system">System voices</TabsTrigger>
         </TabsList>
       </Tabs>
@@ -186,25 +183,6 @@ export default function StudioPage() {
                   are instant if you prefer.
                 </p>
               )}
-            </div>
-          </CardContent>
-        </Card>
-      ) : engineChoice === "kitten" ? (
-        <Card>
-          <CardContent className="flex items-start gap-3 pt-6 text-sm">
-            <Info className="mt-0.5 h-4 w-4 shrink-0" />
-            <div>
-              <p>
-                <strong>KittenTTS Nano</strong> — a tiny (~24&nbsp;MB) neural
-                voice model that runs on your device. Much faster than Kokoro
-                on phones and low-power devices, with 8 built-in voices.
-                First use downloads the model once (cached after); quality is
-                simpler than Kokoro&apos;s.
-              </p>
-              <p className="mt-1 text-muted-foreground">
-                Recommended automatically on phones — it avoids the memory and
-                speed problems the full-size model has on mobile.
-              </p>
             </div>
           </CardContent>
         </Card>

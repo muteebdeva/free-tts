@@ -39,7 +39,14 @@ treat absence as "unknown", never as "capable").
 
 **Light neural opt-up (mobile only, gated).** Candidate: **KittenTTS Nano**
 (~24 MB, Apache-2.0, ~3× real-time in browser WASM per research sources) as a
-new `engines/kitten/` implementing `TTSEngine`. **Ship-blockers, non-negotiable:**
+new `engines/kitten/` implementing `TTSEngine`.
+
+> **HISTORICAL NOTE (2026-11-04):** this opt-up was implemented, gated, and
+> shipped — then **removed at the user's request** ("Remove kitten I don't
+> want this model"). `engines/kitten/`, its worker registry, UI tab, tests,
+> and verify scripts are gone; `docs/KITTEN-SPIKE.md` and
+> `docs/evidence/kitten-verify.*` remain as the historical record. Phones now
+> default to system voices. **Ship-blockers, non-negotiable:**
 (1) it must pass the repo's real-audio gate (`scripts/verify-pages.mjs`
 extended — real WAV bytes, non-silent, sane duration); (2) license verified
 against the exact distribution (weights Apache-2.0; note its espeak-ng
@@ -48,8 +55,8 @@ but verify the bundle actually used); (3) size/speed claims re-measured, not
 quoted. **Piper stays out** until its license conflict (MIT vs GPLv3 across
 2026 sources) is resolved per distribution — flag, do not ship on hope.
 
-**Files:** new `lib/device-profile.ts`; new `engines/kitten/*` (only after the
-gate passes); `components/tts-provider.tsx` (default `engineChoice` from
+**Files:** new `lib/device-profile.ts`; ~~new `engines/kitten/*` (only after the
+gate passes);~~ `components/tts-provider.tsx` (default `engineChoice` from
 profile, engine tabs show/hide per ladder); `app/settings/page.tsx` (device
 badge shows profile + active path); `engines/kokoro/kokoro-engine.ts` (accept
 an injected device/dtype policy instead of self-detecting only).
@@ -255,9 +262,10 @@ file).
 3. **Non-JSEP WASM pinning — FEASIBLE** but needs build plumbing (ship the
    binary, set `wasmPaths` per profile) and a gate asserting the fetched
    binary name. Do it; it also fixes BOTTLENECKS.md #7.
-4. **KittenTTS Nano / Piper as neural opt-up — FEASIBLE but GATED** on the
+4. **~~KittenTTS Nano /~~ Piper as neural opt-up — FEASIBLE but GATED** on the
    real-audio gate + license verification (see (a)). Never ship on quoted
-   benchmarks.
+   benchmarks. (KittenTTS Nano was implemented, gated, shipped, then removed
+   at the user's request on 2026-11-04.)
 5. **iOS 26 WebGPU re-enable — CONDITIONAL** on `microsoft/onnxruntime#26827`
    being fixed upstream; watch the issue, keep the force-WASM rule until then.
 6. **Gapless streaming (MSE/WebCodecs) — OUT OF SCOPE** for Phase 2;

@@ -2,18 +2,17 @@
 /**
  * FreeTTS gapless-playback verification gate.
  *
- * Proves, with real KittenTTS Nano inference in headless Chromium:
+ * Proves, with real Kokoro-82M inference in headless Chromium:
  *
  *  1. The streamed chunks stitch into a real, non-silent WAV (the download).
  *  2. The GaplessPlayer schedules chunks back-to-back: every joint overlaps
  *     by exactly the 8 ms crossfade — zero inserted silence.
  *  3. No true digital-silence gaps at chunk joints in the stitched audio:
  *     within ±50 ms of each joint, the longest run of near-zero samples
- *     (|v| < 1e-4) must be < 50 ms. Rationale, measured 2026-11-04: the
- *     model generates natural inter-sentence pauses carrying a very quiet
+ *     (|v| < 1e-4) must be < 50 ms. Rationale, measured 2026-11-04: neural
+ *     TTS generates natural inter-sentence pauses carrying a very quiet
  *     noise floor (RMS ~0.001) — a 0.005 floor misclassifies ~100 ms of
- *     that as "silence". True inserted silence would be digital zeros;
- *     measured longest near-zero run at a real joint is 1.9 ms.
+ *     that as "silence". True inserted silence would be digital zeros.
  *  4. The stitched duration equals the deterministic trim+crossfade
  *     transform of the chunk durations (exact sample-count match).
  *
@@ -23,9 +22,14 @@
  *    The timeline check (2) is the primary proof of zero inserted silence;
  *    this is the audio-content sanity check.
  *
- * Usage: node scripts/verify-gapless.mjs [--text "..."] [--voice expr-voice-2-f]
+ * Usage: node scripts/verify-gapless.mjs [--text "..."] [--voice af_heart]
  * Requires: out/ built with INCLUDE_VERIFY=1 (the script builds it if needed),
  *           .verify-assets/ mirror present (see scripts/verify-pages.mjs).
+ *
+ * NOTE (2026-11-04): this gate originally ran KittenTTS Nano. The Kitten
+ * engine was removed at the user's request; the gate now runs Kokoro-82M.
+ * The GaplessPlayer is engine-agnostic, so the scheduling proof carries
+ * over. Historical Kitten evidence stays in docs/evidence/.
  */
 import { cpSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -50,7 +54,7 @@ const TEXT = opt(
     "The gulls settled as the sun cleared the point and the water went flat. " +
     "Mara turned the boat toward home, the engine humming low under her feet.",
 );
-const VOICE = opt("--voice", "expr-voice-2-f");
+const VOICE = opt("--voice", "af_heart");
 const SAMPLE_RATE = 24000;
 const XFADE_SEC = 0.008;
 const XFADE_SAMPLES = Math.round(SAMPLE_RATE * XFADE_SEC); // 192
@@ -148,7 +152,7 @@ try {
   page.on("pageerror", (e) => console.log("[pageerror]", String(e).slice(0, 400)));
   const url =
     `http://localhost:${PORT}/verify?text=${encodeURIComponent(TEXT)}&voice=${VOICE}` +
-    `&engine=kitten&assets=1&stream=1&gapless=1&profile=compatibility`;
+    `&assets=1&stream=1&gapless=1&profile=compatibility`;
   console.log("[verify-gapless] loading", url.slice(0, 100) + "…");
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 });
   console.log("[verify-gapless] waiting for synthesis + gapless schedule (up to 15 min)…");
@@ -258,7 +262,7 @@ try {
     date: new Date().toISOString(),
     text: TEXT,
     voice: VOICE,
-    engine: "kitten",
+    engine: "kokoro",
     numSamples,
     durationSec: +(numSamples / sampleRate).toFixed(2),
     peak: +peak.toFixed(4),

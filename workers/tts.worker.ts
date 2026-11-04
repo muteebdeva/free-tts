@@ -1,6 +1,6 @@
 /**
- * TTS Web Worker: runs neural TTS engines (Kokoro, KittenTTS Nano) off the
- * main thread. ("system" voices stay main-thread — Web Speech API.)
+ * TTS Web Worker: runs the Kokoro neural TTS engine off the main thread.
+ * ("system" voices stay main-thread — Web Speech API.)
  *
  * Responsibilities:
  *  - load the model once (progress reported to the UI),
@@ -21,22 +21,20 @@
  * (audio/gapless-player.ts) with a legacy <audio> fallback.
  */
 import { KokoroEngine } from "../engines/kokoro/kokoro-engine";
-import { KittenEngine } from "../engines/kitten/kitten-engine";
 import type { TTSEngine } from "../engines/engine-interface";
 import { concatChunks } from "../audio/concat";
 import { chunkText } from "../lib/text-chunk";
 import { env as kokoroEnv } from "kokoro-js";
-import { env as ortEnv } from "onnxruntime-web";
 
-/** Neural engines that run inside this worker. ("system" stays main-thread.) */
-export type WorkerEngineId = "kokoro" | "kitten";
+/** Neural engine that runs inside this worker. ("system" stays main-thread.) */
+export type WorkerEngineId = "kokoro";
 
 /** Lazily-created engine registry — one instance per engine per worker lifetime. */
 const engines = new Map<WorkerEngineId, TTSEngine>();
 function getEngine(id: WorkerEngineId): TTSEngine {
   let e = engines.get(id);
   if (!e) {
-    e = id === "kitten" ? new KittenEngine() : new KokoroEngine();
+    e = new KokoroEngine();
     engines.set(id, e);
   }
   return e;
@@ -69,8 +67,9 @@ type InMessage =
   | { type: "device"; requestId: number; engineId?: WorkerEngineId };
 
 function engineIdOf(msg: { engineId?: WorkerEngineId }): WorkerEngineId {
-  // Default keeps the verify harness (which sends no engineId) on Kokoro.
-  return msg.engineId === "kitten" ? "kitten" : "kokoro";
+  // Kokoro is the only neural engine. The engineId field stays on the wire
+  // so the protocol remains engine-agnostic.
+  return "kokoro";
 }
 let currentAbort: AbortController | null = null;
 let currentRequestId: number | null = null;
@@ -146,12 +145,6 @@ function applyOrtPolicy(ort: OrtPolicy | undefined, assetBase: string | undefine
   if (wasm && Number.isInteger(ort.numThreads) && (ort.numThreads as number) > 0) {
     wasm.numThreads = ort.numThreads;
   }
-  // KittenTTS uses onnxruntime-web directly (not kokoro-js's vendored copy),
-  // so its env needs the same policy applied to its own instance.
-  const kittenWasm = (ortEnv as unknown as { wasm?: { numThreads?: unknown; wasmPaths?: unknown } }).wasm;
-  if (kittenWasm && Number.isInteger(ort.numThreads) && (ort.numThreads as number) > 0) {
-    kittenWasm.numThreads = ort.numThreads;
-  }
   // Verify harness: the sandbox blocks CDN fetches, so the mirror's
   // wasmPaths (set by useAssetMirror) always wins there.
   if (ort.sameOriginWasm && !assetBase) {
@@ -159,7 +152,6 @@ function applyOrtPolicy(ort: OrtPolicy | undefined, assetBase: string | undefine
     // version-skew 404 (BOTTLENECKS.md #7). The runtime requests the
     // jsep-named files, which are shipped there; see spike note above.
     kokoroEnv.wasmPaths = "/ort/";
-    if (kittenWasm) kittenWasm.wasmPaths = "/ort/";
   }
 }
 
@@ -218,8 +210,7 @@ self.onmessage = async (event: MessageEvent<InMessage>) => {
         currentAbort = aborter;
         currentRequestId = msg.requestId;
 
-        // KittenTTS Nano: cap at 200 chars (BERT ~512-token limit; see streaming handler).
-        const batchChunkChars = engineIdOf(msg) === "kitten" ? 200 : 400;
+        const batchChunkChars = 400;
         const chunks = chunkText(msg.text, { maxChars: batchChunkChars, locale: "en" });
         const waves: Float32Array[] = [];
         let sampleRate = 24000;
@@ -262,11 +253,6 @@ self.onmessage = async (event: MessageEvent<InMessage>) => {
         let chunkChars =
           msg.chunkChars && msg.chunkChars >= 20 ? msg.chunkChars : 400;
         const highWater = msg.highWater && msg.highWater >= 1 ? msg.highWater : 3;
-        // KittenTTS Nano: the BERT encoder has a ~512-token position limit.
-        // English phonemizes to ~1.3 tokens/char, so 382 chars (≈500 tokens)
-        // fails with "invalid expand shape" while 196 chars works. Cap at
-        // 200 chars (empirically safe; matches the compatibility profile).
-        if (engineIdOf(msg) === "kitten") chunkChars = Math.min(chunkChars, 200);
         streamCtl = { requestId: msg.requestId, unacked: 0, highWater, waiters: [] };
 
         const chunks = chunkText(msg.text, { maxChars: chunkChars, locale: "en" });

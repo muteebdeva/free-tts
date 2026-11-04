@@ -38,11 +38,9 @@ export default function VerifyRunner() {
       const text =
         params.get("text") ||
         "Hello. This is a verification test of the FreeTTS speech engine.";
-      // ?engine=kitten → drive the KittenTTS Nano engine through the worker
-      // registry instead of Kokoro. All engine-manager calls take engineId.
-      const engineId = params.get("engine") === "kitten" ? "kitten" : "kokoro";
-      const voice =
-        params.get("voice") || (engineId === "kitten" ? "expr-voice-2-f" : "af_heart");
+      // Kokoro is the only neural engine in the worker registry.
+      const engineId = "kokoro" as const;
+      const voice = params.get("voice") || "af_heart";
       const speed = parseFloat(params.get("speed") || "1") || 1;
       // ?assets=1 → use the same-origin verification mirror (see
       // app/api/verify-assets). Production never sets this.
@@ -163,24 +161,13 @@ export default function VerifyRunner() {
           await sp2;
           const batch = await mgr.synthesize(text, voice, speed, {}, engineId);
           const streamed400 = concatChunks(parts400, { sampleRate });
-          // KittenTTS Nano is non-deterministic: identical inputs produce
-          // different PCM (measured maxDiff 0.27 on a 470-char text; 0.00024
-          // on a 26-char text). This is model stochasticity, not transport
-          // corruption. For kitten the transport check is: identical chunk
-          // count, identical total length, and non-silent audio — the
-          // streaming protocol is verified, the model's randomness is not
-          // our bug. Exact byte-match remains kokoro-only.
-          if (engineId === "kitten") {
-            pcmByteMatch =
-              batch.samples.length === streamed400.length &&
-              batch.sampleRate === sampleRate &&
-              peakAmplitude(streamed400) > 0.02;
-          } else {
-            pcmByteMatch =
-              batch.samples.length === streamed400.length &&
-              batch.sampleRate === sampleRate &&
-              batch.samples.every((v, i) => v === streamed400[i]);
-          }
+          // Regression: the streaming transport (transfers, ordering,
+          // concat) must not change audio — streamed PCM must byte-match
+          // batch PCM for the same input and chunking.
+          pcmByteMatch =
+            batch.samples.length === streamed400.length &&
+            batch.sampleRate === sampleRate &&
+            batch.samples.every((v, i) => v === streamed400[i]);
         } else {
           const result = await mgr.synthesize(
             text,

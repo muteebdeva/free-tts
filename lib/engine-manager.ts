@@ -25,8 +25,8 @@
  */
 import type { Voice } from "../engines/engine-interface";
 
-/** Neural engines that run inside the worker. ("system" voices stay main-thread.) */
-export type WorkerEngineId = "kokoro" | "kitten";
+/** Neural engine that runs inside the worker. ("system" voices stay main-thread.) */
+export type WorkerEngineId = "kokoro";
 
 /** Minimal worker surface — injectable for tests. */
 export interface WorkerLike {

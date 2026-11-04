@@ -4,6 +4,21 @@
 **Coordinator:** Principal engineering subagent (depth 1/2)
 **Spec:** Muteeb's Master Engineering Prompt — 9 phases (Inspect → Diagnose → Document → Design → Implement → Test → Benchmark → Optimize → Verify → Document)
 
+> **ADDENDUM 2026-11-04 ~16:00 IST — KittenTTS Nano REMOVED.** At the user's
+> explicit request ("Remove kitten I don't want this model"), the KittenTTS
+> Nano engine was removed from the codebase in full: `engines/kitten/`,
+> worker registry entries, engine-manager/provider wiring, the studio UI tab
+> and info card, the `?engine=kitten` verify harness, Kitten-specific tests
+> and verify scripts (`verify-kitten.mjs`, `kitten-npz.mjs`), the
+> `kitten-tts` model-cache entry, the `.verify-assets` KittenML mirror, and
+> device-ladder references (phones now default to Web Speech system voices;
+> Kokoro stays gated to WebGPU-capable desktop). The gapless gate
+> (`scripts/verify-gapless.mjs`) was re-pointed at real Kokoro-82M streaming
+> inference — the GaplessPlayer is engine-agnostic, so the scheduling proof
+> carries over. Historical Kitten evidence stays in `docs/evidence/`
+> (kitten-verify.{wav,json}) and `docs/KITTEN-SPIKE.md`. Everything below
+> describes the state *before* this removal unless otherwise noted.
+
 ---
 
 ## 1. Inspect — Architecture Audit (Phase 1)

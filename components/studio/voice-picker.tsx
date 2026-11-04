@@ -30,9 +30,9 @@ export function VoicePicker({
   onChange: (id: string) => void;
   disabled?: boolean;
 }) {
-  const { engineChoice, voices, kittenVoices, systemVoices, previewVoice, previewingId } = useTTS();
+  const { engineChoice, voices, systemVoices, previewVoice, previewingId } = useTTS();
   const list: Voice[] =
-    engineChoice === "kokoro" ? voices : engineChoice === "kitten" ? kittenVoices : systemVoices;
+    engineChoice === "kokoro" ? voices : systemVoices;
 
   const selected = list.find((v) => v.id === voiceId) ?? list[0];
   const previewing = previewingId === selected?.id;
@@ -91,7 +91,7 @@ export function VoicePicker({
       {selected && (
         <p className="text-xs text-muted-foreground">{selected.description}</p>
       )}
-      {(engineChoice === "kokoro" || engineChoice === "kitten") && list.length === 0 && (
+      {engineChoice === "kokoro" && list.length === 0 && (
         <p className="text-xs text-muted-foreground">Loading voices…</p>
       )}
       {engineChoice === "system" && list.length === 0 && (
@@ -112,9 +112,6 @@ function groupVoices(
   list: Voice[],
   engine: EngineChoice,
 ): Array<{ label: string; voices: Voice[] }> {
-  if (engine === "kitten") {
-    return [{ label: "KittenTTS Nano voices", voices: list }];
-  }
   if (engine !== "kokoro") {
     return [{ label: "On-device voices", voices: list }];
   }
